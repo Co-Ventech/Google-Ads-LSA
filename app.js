@@ -1231,7 +1231,7 @@ if (process.env.NODE_ENV !== 'test') {
   cron.schedule('*/5 * * * *', async () => {
     console.log('🕐 Automated 5-minute polling triggered...');
     try {
-      const result = await pollLeadsLastMinutes(5);
+      const result = await pollLeadsLastMinutes(250);
       console.log(`⏰ Cron result: ${result.processedCount} processed, ${result.sentCount} sent`);
     } catch (error) {
       console.error('❌ Cron job failed:', error.message);
