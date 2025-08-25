@@ -377,6 +377,10 @@ const {
   GOOGLE_ADS_CUSTOMER_ID,
   GOOGLE_ADS_LOGIN_CUSTOMER_ID,
   LINDY_WEBHOOK_URL,
+  GHL_ACCESS_TOKEN,
+  GHL_LOCATION_ID,
+  PROBATE_CALENDAR_ID,
+  ESTATE_PLANNING_CALENDAR_ID
 } = process.env;
 
 // ===== TOKEN MANAGEMENT SYSTEM =====
@@ -694,11 +698,424 @@ async function pollLeadsLastMinutes(minutes = 5) {
   };
 }
 
+// ===== GOHIGHLEVEL INTEGRATION FUNCTIONS =====
+
+/**
+ * 1. UPSERT CONTACT IN GOHIGHLEVEL (Official API)
+ */
+async function upsertGHLContact(lsaLead) {
+  const contactPayload = {
+    firstName: lsaLead.contactInfo.name || 'LSA Lead',
+    phone: lsaLead.contactInfo.phone || '',
+    email: lsaLead.contactInfo.email || '',
+    locationId: GHL_LOCATION_ID,
+    source: 'Google LSA',
+    tags: ['lsa-lead', 'legal-consultation'],
+    customFields: {
+      lsa_lead_id: lsaLead.leadId,
+      lsa_message: lsaLead.messageText,
+      lsa_timestamp: lsaLead.timestamp
+    }
+  };
+
+  const headers = {
+    'Authorization': `Bearer ${GHL_ACCESS_TOKEN}`,
+    'Content-Type': 'application/json',
+    'Version': '2021-04-15'
+  };
+
+  try {
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/contacts/',
+      contactPayload,
+      { headers }
+    );
+    
+    console.log(`✅ Created GHL contact: ${response.data.contact.id}`);
+    return {
+      success: true,
+      contact: response.data.contact,
+      contactId: response.data.contact.id
+    };
+    
+  } catch (error) {
+    console.error('❌ Contact creation failed:', error.response?.data);
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message
+    };
+  }
+}
+
+/**
+ * 2. FETCH CALENDAR AVAILABILITY (Official API)
+ */
+async function fetchCalendarAvailability(calendarId, date = null) {
+  if (!date) {
+    date = new Date().toISOString().split('T'); // Today
+  }
+
+  const headers = {
+    'Authorization': `Bearer ${GHL_ACCESS_TOKEN}`,
+    'Version': '2021-04-15'
+  };
+
+  try {
+    // Get calendar free slots
+    const response = await axios.get(
+      `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${date}&endDate=${date}&timezone=America/New_York`,
+      { headers }
+    );
+    
+    console.log(`📅 Found ${response.data.slots?.length || 0} free slots for ${calendarId}`);
+    
+    return {
+      success: true,
+      calendarId,
+      date,
+      slots: response.data.slots || [],
+      availableCount: response.data.slots?.length || 0
+    };
+    
+  } catch (error) {
+    console.error(`❌ Failed to fetch availability:`, error.response?.data);
+    return {
+      success: false,
+      calendarId,
+      error: error.response?.data?.message || error.message
+    };
+  }
+}
+
+/**
+ * 3. CREATE APPOINTMENT (Official API)
+ */
+async function createGHLAppointment(contactId, calendarId, startTime, endTime, notes = '') {
+  const appointmentPayload = {
+    calendarId: calendarId,
+    contactId: contactId,
+    startTime: startTime,
+    endTime: endTime,
+    title: 'LSA Legal Consultation',
+    appointmentStatus: 'confirmed',
+    notes: notes || 'Appointment created from LSA lead via Lindy',
+    source: 'api'
+  };
+
+  const headers = {
+    'Authorization': `Bearer ${GHL_ACCESS_TOKEN}`,
+    'Content-Type': 'application/json',
+    'Version': '2021-04-15'
+  };
+
+  try {
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/calendars/events/appointments',
+      appointmentPayload,
+      { headers }
+    );
+    
+    console.log(`✅ Created appointment: ${response.data.id}`);
+    return {
+      success: true,
+      appointment: response.data,
+      appointmentId: response.data.id
+    };
+    
+  } catch (error) {
+    console.error('❌ Appointment creation failed:', error.response?.data);
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message
+    };
+  }
+}
+
+// ===== NEW API ENDPOINTS FOR LINDY INTEGRATION =====
+
+/**
+ * LINDY ENDPOINT 1: Create Contact in GoHighLevel
+ */
+app.post('/lindy/create-contact', async (req, res) => {
+  try {
+    const lsaLead = req.body;
+    
+    if (!lsaLead.leadId || !lsaLead.contactInfo) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: leadId, contactInfo'
+      });
+    }
+    
+    const result = await upsertGHLContact(lsaLead);
+    
+    res.json({
+      success: result.success,
+      contact: result.contact,
+      contactId: result.contactId,
+      error: result.error,
+      timestamp: new Date().toISOString(),
+      endpoint: 'create-contact'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * LINDY ENDPOINT 2: Fetch Calendar Availability for Both Calendars
+ */
+app.post('/lindy/check-availability', async (req, res) => {
+  try {
+    const { date, serviceType } = req.body;
+    const checkDate = date || new Date().toISOString().split('T');
+    
+    // Check both calendars simultaneously
+    const [probateAvailability, estateAvailability] = await Promise.all([
+      fetchCalendarAvailability(PROBATE_CALENDAR_ID, checkDate),
+      fetchCalendarAvailability(ESTATE_PLANNING_CALENDAR_ID, checkDate)
+    ]);
+    
+    // Determine recommended calendar based on service type
+    let recommendedCalendar = 'probate';
+    if (serviceType && (serviceType.includes('estate') || serviceType.includes('trust') || serviceType.includes('will'))) {
+      recommendedCalendar = 'estate_planning';
+    }
+    
+    res.json({
+      success: true,
+      date: checkDate,
+      calendars: {
+        probate: {
+          calendarId: PROBATE_CALENDAR_ID,
+          available: probateAvailability.success,
+          slots: probateAvailability.slots || [],
+          availableCount: probateAvailability.availableCount || 0
+        },
+        estate_planning: {
+          calendarId: ESTATE_PLANNING_CALENDAR_ID,
+          available: estateAvailability.success,
+          slots: estateAvailability.slots || [],
+          availableCount: estateAvailability.availableCount || 0
+        }
+      },
+      recommendation: {
+        calendar: recommendedCalendar,
+        calendarId: recommendedCalendar === 'probate' ? PROBATE_CALENDAR_ID : ESTATE_PLANNING_CALENDAR_ID,
+        hasSlots: recommendedCalendar === 'probate' ? probateAvailability.availableCount > 0 : estateAvailability.availableCount > 0
+      },
+      timestamp: new Date().toISOString(),
+      endpoint: 'check-availability'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * LINDY ENDPOINT 3: Create Appointment in Selected Calendar
+ */
+app.post('/lindy/create-appointment', async (req, res) => {
+  try {
+    const { contactId, calendarId, startTime, endTime, notes, leadId } = req.body;
+    
+    if (!contactId || !calendarId || !startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: contactId, calendarId, startTime, endTime'
+      });
+    }
+    
+    const result = await createGHLAppointment(contactId, calendarId, startTime, endTime, notes);
+    
+    res.json({
+      success: result.success,
+      appointment: result.appointment,
+      appointmentId: result.appointmentId,
+      calendarType: calendarId === PROBATE_CALENDAR_ID ? 'Probate' : 'Estate Planning',
+      error: result.error,
+      leadId: leadId,
+      timestamp: new Date().toISOString(),
+      endpoint: 'create-appointment'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * LINDY ENDPOINT 4: Complete Workflow (All-in-One)
+ */
+app.post('/lindy/complete-workflow', async (req, res) => {
+  try {
+    const lsaLead = req.body;
+    
+    console.log(`🔄 Starting complete workflow for lead ${lsaLead.leadId}`);
+    
+    // Step 1: Create contact
+    const contactResult = await upsertGHLContact(lsaLead);
+    if (!contactResult.success) {
+      return res.status(500).json({
+        success: false,
+        step: 'create-contact',
+        error: contactResult.error
+      });
+    }
+    
+    // Step 2: Check availability for next 3 days
+    const today = new Date();
+    const availabilityPromises = [];
+    
+    for (let i = 0; i < 3; i++) {
+      const checkDate = new Date(today);
+      checkDate.setDate(today.getDate() + i);
+      const dateStr = checkDate.toISOString().split('T');
+      
+      availabilityPromises.push(
+        Promise.all([
+          fetchCalendarAvailability(PROBATE_CALENDAR_ID, dateStr),
+          fetchCalendarAvailability(ESTATE_PLANNING_CALENDAR_ID, dateStr)
+        ]).then(([probate, estate]) => ({
+          date: dateStr,
+          probate,
+          estate
+        }))
+      );
+    }
+    
+    const availability = await Promise.all(availabilityPromises);
+    
+    // Step 3: Auto-book first available slot if exists
+    let appointment = null;
+    let calendarUsed = null;
+    
+    // Try to find first available slot
+    for (const day of availability) {
+      if (day.probate.success && day.probate.slots.length > 0) {
+        const slot = day.probate.slots;
+        appointment = await createGHLAppointment(
+          contactResult.contactId,
+          PROBATE_CALENDAR_ID,
+          slot.startTime,
+          slot.endTime,
+          `Auto-booked from LSA lead ${lsaLead.leadId}`
+        );
+        calendarUsed = 'Probate';
+        break;
+      } else if (day.estate.success && day.estate.slots.length > 0) {
+        const slot = day.estate.slots;
+        appointment = await createGHLAppointment(
+          contactResult.contactId,
+          ESTATE_PLANNING_CALENDAR_ID,
+          slot.startTime,
+          slot.endTime,
+          `Auto-booked from LSA lead ${lsaLead.leadId}`
+        );
+        calendarUsed = 'Estate Planning';
+        break;
+      }
+    }
+    
+    res.json({
+      success: true,
+      leadId: lsaLead.leadId,
+      contact: {
+        created: true,
+        contactId: contactResult.contactId,
+        name: contactResult.contact.firstName,
+        phone: contactResult.contact.phone,
+        email: contactResult.contact.email
+      },
+      availability: availability.map(day => ({
+        date: day.date,
+        probateSlots: day.probate.availableCount || 0,
+        estateSlots: day.estate.availableCount || 0
+      })),
+      appointment: appointment ? {
+        created: true,
+        appointmentId: appointment.appointmentId,
+        calendar: calendarUsed,
+        startTime: appointment.appointment.startTime,
+        endTime: appointment.appointment.endTime
+      } : {
+        created: false,
+        reason: 'No available slots found in next 3 days'
+      },
+      timestamp: new Date().toISOString(),
+      endpoint: 'complete-workflow'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Add to your existing health check
+app.get('/api/health', async (req, res) => {
+  try {
+    const accessToken = await getGoogleAccessToken();
+    
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      tokenSystem: {
+        status: 'working',
+        hasValidToken: !!accessToken,
+        tokenExpiresAt: new Date(tokenCache.expiresAt).toISOString(),
+        autoRefreshEnabled: true
+      },
+      integrations: {
+        googleAds: {
+          hasCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
+          customerId: GOOGLE_ADS_CUSTOMER_ID
+        },
+        lindy: {
+          hasWebhook: !!LINDY_WEBHOOK_URL
+        },
+        goHighLevel: {
+          hasToken: !!GHL_ACCESS_TOKEN,
+          locationId: GHL_LOCATION_ID,
+          calendars: {
+            probate: PROBATE_CALENDAR_ID,
+            estatePlanning: ESTATE_PLANNING_CALENDAR_ID
+          }
+        }
+      },
+      lindyEndpoints: [
+        'POST /lindy/create-contact',
+        'POST /lindy/check-availability', 
+        'POST /lindy/create-appointment',
+        'POST /lindy/complete-workflow'
+      ]
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error.message
+    });
+  }
+});
 // ===== API ENDPOINTS =====
 
 // Poll last 5 minutes (for cron)
 app.get('/api/poll/recent', async (req, res) => {
-  const result = await pollLeadsLastMinutes(5);
+  const result = await pollLeadsLastMinutes(245);
   res.json(result);
 });
 
