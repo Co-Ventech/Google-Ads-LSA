@@ -1115,7 +1115,7 @@ app.get('/api/health', async (req, res) => {
 
 // Poll last 5 minutes (for cron)
 app.get('/api/poll/recent', async (req, res) => {
-  const result = await pollLeadsLastMinutes(245);
+  const result = await pollLeadsLastMinutes(250);
   res.json(result);
 });
 
