@@ -1,0 +1,11 @@
+node_modules/
+db/
+rabbitmq_data/
+.env
+service-account-key.json
+.scannerwork/
+data/
+Lib
+venv
+requirements.txt
+Scripts
