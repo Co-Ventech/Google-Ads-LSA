@@ -1100,277 +1100,370 @@
 
 // module.exports = app;
 
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
-const path = require('path');
-const fs = require('fs').promises;
-const cron = require('node-cron');
-const qs = require('querystring');
+// require('dotenv').config();
+// const express = require('express');
+// const axios = require('axios');
+// const path = require('path');
+// const fs = require('fs').promises;
+// const cron = require('node-cron');
+// const qs = require('querystring');
 
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// const app = express();
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: true }));
 
-const PORT = process.env.PORT || 3000;
+// const PORT = process.env.PORT || 3000;
 
-// ===== ENVIRONMENT VARIABLES =====
-const {
-  GOOGLE_CLIENT_ID,
-  GOOGLE_CLIENT_SECRET,
-  GOOGLE_REFRESH_TOKEN,
-  GOOGLE_ADS_DEVELOPER_TOKEN,
-  GOOGLE_ADS_CUSTOMER_ID,
-  GOOGLE_ADS_LOGIN_CUSTOMER_ID,
-  LINDY_WEBHOOK_URL,
-  // NEW DYNAMIC VARIABLES
-  POLL_INTERVAL_MINUTES = 5,        // How often to run cron (default: 5 minutes)
-  POLL_BACK_MINUTES = 250,          // How far back to fetch leads (default: 250 minutes)
-  ADD_PHONE_LEADS = 'false'         // Include phone leads (default: false)
-} = process.env;
+// // ===== ENVIRONMENT VARIABLES =====
+// const {
+//   GOOGLE_CLIENT_ID,
+//   GOOGLE_CLIENT_SECRET,
+//   GOOGLE_REFRESH_TOKEN,
+//   GOOGLE_ADS_DEVELOPER_TOKEN,
+//   GOOGLE_ADS_CUSTOMER_ID,
+//   GOOGLE_ADS_LOGIN_CUSTOMER_ID,
+//   LINDY_WEBHOOK_URL,
+//   // NEW DYNAMIC VARIABLES
+//   POLL_INTERVAL_MINUTES = 5,        // How often to run cron (default: 5 minutes)
+//   POLL_BACK_MINUTES = 250,          // How far back to fetch leads (default: 250 minutes)
+//   ADD_PHONE_LEADS = 'false'         // Include phone leads (default: false)
+// } = process.env;
 
-// ===== TOKEN MANAGEMENT SYSTEM =====
-let tokenCache = {
-  accessToken: null,
-  expiresAt: 0
-};
+// // ===== TOKEN MANAGEMENT SYSTEM =====
+// let tokenCache = {
+//   accessToken: null,
+//   expiresAt: 0
+// };
 
-async function getGoogleAccessToken() {
-  const now = Date.now();
+// async function getGoogleAccessToken() {
+//   const now = Date.now();
   
-  if (tokenCache.accessToken && now < tokenCache.expiresAt - 60000) {
-    console.log('✅ Using cached access token');
-    return tokenCache.accessToken;
-  }
+//   if (tokenCache.accessToken && now < tokenCache.expiresAt - 60000) {
+//     console.log('✅ Using cached access token');
+//     return tokenCache.accessToken;
+//   }
 
-  console.log('🔄 Auto-generating new Google access token...');
+//   console.log('🔄 Auto-generating new Google access token...');
   
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
-    throw new Error('Missing required Google OAuth credentials in environment variables');
-  }
+//   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+//     throw new Error('Missing required Google OAuth credentials in environment variables');
+//   }
 
-  try {
-    const response = await axios.post(
-      'https://oauth2.googleapis.com/token',
-      qs.stringify({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        refresh_token: GOOGLE_REFRESH_TOKEN,
-        grant_type: 'refresh_token'
-      }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
-        }
-      }
-    );
+//   try {
+//     const response = await axios.post(
+//       'https://oauth2.googleapis.com/token',
+//       qs.stringify({
+//         client_id: GOOGLE_CLIENT_ID,
+//         client_secret: GOOGLE_CLIENT_SECRET,
+//         refresh_token: GOOGLE_REFRESH_TOKEN,
+//         grant_type: 'refresh_token'
+//       }),
+//       {
+//         headers: {
+//           'Content-Type': 'application/x-www-form-urlencoded'
+//         }
+//       }
+//     );
 
-    tokenCache.accessToken = response.data.access_token;
-    tokenCache.expiresAt = now + (response.data.expires_in * 1000);
+//     tokenCache.accessToken = response.data.access_token;
+//     tokenCache.expiresAt = now + (response.data.expires_in * 1000);
     
-    console.log(`✅ New access token generated successfully`);
-    console.log(`⏰ Token expires in ${response.data.expires_in} seconds`);
+//     console.log(`✅ New access token generated successfully`);
+//     console.log(`⏰ Token expires in ${response.data.expires_in} seconds`);
     
-    return tokenCache.accessToken;
+//     return tokenCache.accessToken;
     
-  } catch (error) {
-    console.error('❌ Failed to generate access token:', error.response?.data || error.message);
-    throw new Error(`Token generation failed: ${error.response?.data?.error_description || error.message}`);
-  }
-}
+//   } catch (error) {
+//     console.error('❌ Failed to generate access token:', error.response?.data || error.message);
+//     throw new Error(`Token generation failed: ${error.response?.data?.error_description || error.message}`);
+//   }
+// }
 
-// Enhanced error handling function
-function logGoogleAdsError(error, context = '') {
-  console.error(`\n❌ Google Ads API Error ${context}:`);
+// // Enhanced error handling function
+// function logGoogleAdsError(error, context = '') {
+//   console.error(`\n❌ Google Ads API Error ${context}:`);
   
-  if (error.response && error.response.data) {
-    const errorData = error.response.data;
-    console.error('Status Code:', error.response.status);
-    console.error('Error Object:', JSON.stringify(errorData, null, 2));
-    return errorData.error?.message || 'Unknown Google Ads API Error';
-  } else {
-    console.error('Network/Other Error:', error.message);
-    return error.message;
-  }
-}
+//   if (error.response && error.response.data) {
+//     const errorData = error.response.data;
+//     console.error('Status Code:', error.response.status);
+//     console.error('Error Object:', JSON.stringify(errorData, null, 2));
+//     return errorData.error?.message || 'Unknown Google Ads API Error';
+//   } else {
+//     console.error('Network/Other Error:', error.message);
+//     return error.message;
+//   }
+// }
 
-// **FETCH LSA LEADS WITH DYNAMIC FILTERING**
-async function fetchLSALeadsLastMinutes(minutes) {
-  const now = new Date();
-  const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
-  
-  const query = `SELECT local_services_lead.lead_type, local_services_lead.category_id, local_services_lead.service_id, local_services_lead.contact_details, local_services_lead.lead_status, local_services_lead.creation_date_time, local_services_lead.locale, local_services_lead.lead_charged, local_services_lead.id, local_services_lead.resource_name FROM local_services_lead ORDER BY local_services_lead.creation_date_time DESC LIMIT 500`;
 
-  const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
-  
-  const accessToken = await getGoogleAccessToken();
-  
-  const headers = {
-    'Authorization': `Bearer ${accessToken}`,
-    'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
-    'Content-Type': 'application/json'
-  };
-  
-  if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
-    headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
-  }
+// // **REPLACE YOUR EXISTING fetchLSALeadsLastMinutes FUNCTION WITH THIS**
+// async function fetchLSALeadsLastMinutes(minutes) {
+//   return await fetchLSALeadsWithActivity(minutes);
+// }
 
-  console.log(`🔍 Fetching LSA leads for last ${minutes} minutes (ADD_PHONE_LEADS=${ADD_PHONE_LEADS})`);
+// // **ADD THIS NEW FUNCTION**
+// async function fetchLSALeadsWithActivity(minutes) {
+//   const now = new Date();
+//   const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+  
+//   console.log(`🔍 Fetching LSA leads + activity for last ${minutes} minutes (ADD_PHONE_LEADS=${ADD_PHONE_LEADS})`);
+  
+//   const accessToken = await getGoogleAccessToken();
+//   const headers = {
+//     'Authorization': `Bearer ${accessToken}`,
+//     'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
+//     'Content-Type': 'application/json'
+//   };
+  
+//   if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
+//     headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+//   }
 
-  try {
-    const response = await axios.post(url, { query }, { headers });
-    const allResults = response.data.results || [];
+//   const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
+  
+//   try {
+//     // Step 1: Get recent conversations to identify leads with activity
+//     const conversationQuery = `
+//       SELECT 
+//         local_services_lead_conversation.lead,
+//         local_services_lead_conversation.event_date_time
+//       FROM local_services_lead_conversation 
+//       ORDER BY local_services_lead_conversation.event_date_time DESC
+//       LIMIT 1000
+//     `;
     
-    console.log(`📊 Found ${allResults.length} total leads`);
+//     const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
+//     const conversations = conversationResponse.data.results || [];
     
-    // Filter by time AND lead type
-    const filteredResults = allResults.filter(result => {
-      const lead = result.localServicesLead;
-      const leadTime = new Date(lead.creationDateTime);
+//     // Find leads with recent activity
+//     const recentActivityLeads = new Set();
+//     conversations.forEach(conv => {
+//       const eventTime = new Date(conv.localServicesLeadConversation.eventDateTime);
+//       if (eventTime >= cutoffTime) {
+//         const leadResourceName = conv.localServicesLeadConversation.lead;
+//         const leadId = leadResourceName.split('/').pop();
+//         recentActivityLeads.add(leadId);
+//       }
+//     });
+    
+//     console.log(`📊 Found ${recentActivityLeads.size} leads with recent conversation activity`);
+    
+//     // Step 2: Get all leads
+//     const leadQuery = `
+//       SELECT 
+//         local_services_lead.lead_type,
+//         local_services_lead.category_id, 
+//         local_services_lead.service_id,
+//         local_services_lead.contact_details,
+//         local_services_lead.lead_status,
+//         local_services_lead.creation_date_time,
+//         local_services_lead.locale,
+//         local_services_lead.lead_charged,
+//         local_services_lead.id,
+//         local_services_lead.resource_name
+//       FROM local_services_lead 
+//       ORDER BY local_services_lead.creation_date_time DESC
+//       LIMIT 500
+//     `;
+    
+//     const leadResponse = await axios.post(url, { query: leadQuery }, { headers });
+//     const allLeads = leadResponse.data.results || [];
+    
+//     console.log(`📊 Found ${allLeads.length} total leads`);
+    
+//     // Step 3: Filter leads (new OR with recent activity)
+//     const filteredResults = allLeads.filter(result => {
+//       const lead = result.localServicesLead;
+//       const createdTime = new Date(lead.creationDateTime);
       
-      // Check if lead is within time window
-      if (leadTime < cutoffTime) return false;
+//       const isNewLead = createdTime >= cutoffTime;
+//       const hasRecentActivity = recentActivityLeads.has(lead.id);
       
-      // Check if we should include phone leads
-      const includePhoneLeads = ADD_PHONE_LEADS === 'true';
-      if (lead.leadType === 'PHONE_CALL' && !includePhoneLeads) {
-        console.log(`⏭️ Skipping phone lead ${lead.id} (ADD_PHONE_LEADS=false)`);
-        return false;
-      }
+//       // Include if newly created OR has recent activity
+//       if (isNewLead || hasRecentActivity) {
+//         // Apply phone lead filtering
+//         const includePhoneLeads = ADD_PHONE_LEADS === 'true';
+//         if (lead.leadType === 'PHONE_CALL' && !includePhoneLeads) {
+//           console.log(`⏭️ Skipping phone lead ${lead.id} (ADD_PHONE_LEADS=false)`);
+//           return false;
+//         }
+        
+//         if (hasRecentActivity && !isNewLead) {
+//           console.log(`🔄 Including lead ${lead.id} due to recent conversation activity`);
+//         }
+        
+//         return true;
+//       }
       
-      return true;
-    });
+//       return false;
+//     });
     
-    console.log(`🎯 Filtered to ${filteredResults.length} leads (${allResults.length - filteredResults.length} phone leads excluded)`);
+//     console.log(`🎯 Filtered to ${filteredResults.length} leads (${recentActivityLeads.size} with recent activity, ${allLeads.length - filteredResults.length} excluded)`);
     
-    return {
-      success: true,
-      leads: filteredResults,
-      count: filteredResults.length,
-      totalCount: allResults.length,
-      phoneLeadsExcluded: allResults.length - filteredResults.length
-    };
+//     return {
+//       success: true,
+//       leads: filteredResults,
+//       count: filteredResults.length,
+//       totalCount: allLeads.length,
+//       recentActivityCount: recentActivityLeads.size,
+//       phoneLeadsExcluded: allLeads.length - filteredResults.length
+//     };
     
-  } catch (error) {
-    const errorMessage = logGoogleAdsError(error, `while fetching leads for last ${minutes} minutes`);
-    
-    return {
-      success: false,
-      error: errorMessage,
-      leads: [],
-      count: 0
-    };
-  }
-}
+//   } catch (error) {
+//     const errorMessage = logGoogleAdsError(error, `while fetching leads with activity for last ${minutes} minutes`);
+//     return {
+//       success: false,
+//       error: errorMessage,
+//       leads: [],
+//       count: 0
+//     };
+//   }
+// }
 
-// **FETCH CONVERSATIONS WITH MESSAGE TEXT**
-async function fetchLeadConversations(leadResourceName) {
-  const query = `SELECT local_services_lead_conversation.id, local_services_lead_conversation.conversation_channel, local_services_lead_conversation.participant_type, local_services_lead_conversation.lead, local_services_lead_conversation.event_date_time, local_services_lead_conversation.phone_call_details.call_duration_millis, local_services_lead_conversation.phone_call_details.call_recording_url, local_services_lead_conversation.message_details.text, local_services_lead_conversation.message_details.attachment_urls FROM local_services_lead_conversation WHERE local_services_lead_conversation.lead = '${leadResourceName}'`;
 
-  const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
-  const accessToken = await getGoogleAccessToken();
+// // **FETCH CONVERSATIONS WITH MESSAGE TEXT**
+// async function fetchLeadConversations(leadResourceName) {
+//   const query = `SELECT local_services_lead_conversation.id, local_services_lead_conversation.conversation_channel, local_services_lead_conversation.participant_type, local_services_lead_conversation.lead, local_services_lead_conversation.event_date_time, local_services_lead_conversation.phone_call_details.call_duration_millis, local_services_lead_conversation.phone_call_details.call_recording_url, local_services_lead_conversation.message_details.text, local_services_lead_conversation.message_details.attachment_urls FROM local_services_lead_conversation WHERE local_services_lead_conversation.lead = '${leadResourceName}'`;
+
+//   const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
+//   const accessToken = await getGoogleAccessToken();
   
-  const headers = {
-    'Authorization': `Bearer ${accessToken}`,
-    'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
-    'Content-Type': 'application/json'
-  };
+//   const headers = {
+//     'Authorization': `Bearer ${accessToken}`,
+//     'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
+//     'Content-Type': 'application/json'
+//   };
   
-  if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
-    headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
-  }
+//   if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
+//     headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+//   }
 
-  try {
-    const response = await axios.post(url, { query }, { headers });
-    return response.data.results || [];
-  } catch (error) {
-    logGoogleAdsError(error, `while fetching conversations for lead ${leadResourceName}`);
-    return [];
-  }
-}
+//   try {
+//     const response = await axios.post(url, { query }, { headers });
+//     return response.data.results || [];
+//   } catch (error) {
+//     logGoogleAdsError(error, `while fetching conversations for lead ${leadResourceName}`);
+//     return [];
+//   }
+// }
 
-// **TRANSFORM FOR LINDY - INCLUDES MESSAGE FILTERING**
-const transformLeadForLindy = (leadData, conversations = []) => {
-  const lead = leadData.localServicesLead;
+// // **TRANSFORM FOR LINDY - INCLUDES MESSAGE FILTERING**
+// const transformLeadForLindy = (leadData, conversations = []) => {
+//   const lead = leadData.localServicesLead;
   
-  // Get actual message text from conversation
-  const latestConversation = conversations.find(c => 
-    c.localServicesLeadConversation?.participantType === 'CONSUMER'
-  );
-  const actualMessageText = latestConversation?.localServicesLeadConversation?.messageDetails?.text;
+//   // Get actual message text from conversation
+//   const latestConversation = conversations.find(c => 
+//     c.localServicesLeadConversation?.participantType === 'CONSUMER'
+//   );
+//   const actualMessageText = latestConversation?.localServicesLeadConversation?.messageDetails?.text;
   
-  let messageText = actualMessageText || 
-                   (lead.leadType === 'MESSAGE' ? 'Message content not available' : 
-                    lead.leadType === 'PHONE_CALL' ? 'Phone call inquiry' :
-                    `${lead.leadType} inquiry`);
+//   let messageText = actualMessageText || 
+//                    (lead.leadType === 'MESSAGE' ? 'Message content not available' : 
+//                     lead.leadType === 'PHONE_CALL' ? 'Phone call inquiry' :
+//                     `${lead.leadType} inquiry`);
 
-  const contactDetails = lead.contactDetails || {};
+//   const contactDetails = lead.contactDetails || {};
 
-  // **FORMAT FOR GOHIGHLEVEL UPSERT VIA LINDY**
-  return {
-    // Basic lead info
-    leadId: lead.id,
-    messageText: messageText,
-    leadType: lead.leadType,
-    timestamp: lead.creationDateTime,
+//   // **FORMAT FOR GOHIGHLEVEL UPSERT VIA LINDY**
+//   return {
+//     // Basic lead info
+//     leadId: lead.id,
+//     messageText: messageText,
+//     leadType: lead.leadType,
+//     timestamp: lead.creationDateTime,
     
-    // **GOHIGHLEVEL CONTACT FORMAT** (for Lindy to use directly)
-    ghlContactData: {
-      locationId: process.env.GHL_LOCATION_ID || 'YOUR_LOCATION_ID',
-      firstName: contactDetails.consumerName || 'LSA Lead',
-      lastName: '',
-      email: contactDetails.email || '',
-      phone: contactDetails.phoneNumber || '',
-      tags: ['lsa-lead', 'message-inquiry'],
-      source: 'Google LSA',
-      customFields: [
-        {
-          id: 'LEAD_ID', // Replace with actual custom field ID
-          field_value: lead.id
-        },
-        {
-          id: 'MESSAGE', // Replace with actual custom field ID  
-          field_value: messageText
-        },
-        {
-          id: 'TIMESTAMP', // Replace with actual custom field ID
-          field_value: lead.creationDateTime
-        }
-      ]
-    },
+//     // **GOHIGHLEVEL CONTACT FORMAT** (for Lindy to use directly)
+//     ghlContactData: {
+//       locationId: process.env.GHL_LOCATION_ID || 'YOUR_LOCATION_ID',
+//       firstName: contactDetails.consumerName || 'LSA Lead',
+//       lastName: '',
+//       email: contactDetails.email || '',
+//       phone: contactDetails.phoneNumber || '',
+//       tags: ['lsa-lead', 'message-inquiry'],
+//       source: 'Google LSA',
+//       customFields: [
+//         {
+//           id: 'LEAD_ID', // Replace with actual custom field ID
+//           field_value: lead.id
+//         },
+//         {
+//           id: 'MESSAGE', // Replace with actual custom field ID  
+//           field_value: messageText
+//         },
+//         {
+//           id: 'TIMESTAMP', // Replace with actual custom field ID
+//           field_value: lead.creationDateTime
+//         }
+//       ]
+//     },
     
-    // Legacy format for backward compatibility
-    contactInfo: {
-      name: contactDetails.consumerName || '',
-      phone: contactDetails.phoneNumber || '',
-      email: contactDetails.email || ''
-    }
-  };
-};
+//     // Legacy format for backward compatibility
+//     contactInfo: {
+//       name: contactDetails.consumerName || '',
+//       phone: contactDetails.phoneNumber || '',
+//       email: contactDetails.email || ''
+//     }
+//   };
+// };
 
-function logLeadPayloadForDebugging(lead) {
-  console.log('\n🚀 PAYLOAD BEING SENT TO LINDY:');
-  console.log('=====================================');
-  console.log(`Lead ID: ${lead.leadId}`);
-  console.log(`Message: "${lead.messageText}"`);
-  console.log(`Lead Type: ${lead.leadType}`);
-  console.log(`Contact Name: ${lead.ghlContactData.firstName}`);
-  console.log(`Email: ${lead.ghlContactData.email}`);
-  console.log(`Phone: ${lead.ghlContactData.phone}`);
-  console.log(`Location ID: ${lead.ghlContactData.locationId}`);
-  console.log('Custom Fields:');
-  lead.ghlContactData.customFields.forEach((field, index) => {
-    console.log(`  ${index + 1}. ${field.id} = "${field.field_value}"`);
-  });
-  console.log('=====================================\n');
-}
+// function logLeadPayloadForDebugging(lead) {
+//   console.log('\n🚀 PAYLOAD BEING SENT TO LINDY:');
+//   console.log('=====================================');
+//   console.log(`Lead ID: ${lead.leadId}`);
+//   console.log(`Message: "${lead.messageText}"`);
+//   console.log(`Lead Type: ${lead.leadType}`);
+//   console.log(`Contact Name: ${lead.ghlContactData.firstName}`);
+//   console.log(`Email: ${lead.ghlContactData.email}`);
+//   console.log(`Phone: ${lead.ghlContactData.phone}`);
+//   console.log(`Location ID: ${lead.ghlContactData.locationId}`);
+//   console.log('Custom Fields:');
+//   lead.ghlContactData.customFields.forEach((field, index) => {
+//     console.log(`  ${index + 1}. ${field.id} = "${field.field_value}"`);
+//   });
+//   console.log('=====================================\n');
+// }
 
-// **SEND TO LINDY WEBHOOK**
+// // **SEND TO LINDY WEBHOOK**
+// // async function sendToLindy(payload) {
+// //   if (!LINDY_WEBHOOK_URL) {
+// //     console.warn('⚠️ Lindy webhook URL not configured');
+// //     return { success: false, error: 'Webhook URL not configured' };
+// //   }
+
+// //   try {
+// //     const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
+// //       headers: {
+// //         'Content-Type': 'application/json',
+// //         'User-Agent': 'LSA-GHL-Integration/1.0'
+// //       },
+// //       timeout: 10000
+// //     });
+    
+// //     console.log(`✅ Sent lead ${payload.leadId} to Lindy: ${response.status}`);
+// //     return { 
+// //       success: true, 
+// //       leadId: payload.leadId,
+// //       status: response.status
+// //     };
+    
+// //   } catch (error) {
+// //     console.error(`❌ Failed to send lead ${payload.leadId} to Lindy:`, error.message);
+// //     return { 
+// //       success: false, 
+// //       leadId: payload.leadId,
+// //       error: error.message
+// //     };
+// //   }
+
+  
+// // }
 // async function sendToLindy(payload) {
 //   if (!LINDY_WEBHOOK_URL) {
 //     console.warn('⚠️ Lindy webhook URL not configured');
 //     return { success: false, error: 'Webhook URL not configured' };
 //   }
+
+//   // 🚀 ADD THIS LINE
+//   logLeadPayloadForDebugging(payload);
 
 //   try {
 //     const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
@@ -1396,32 +1489,548 @@ function logLeadPayloadForDebugging(lead) {
 //       error: error.message
 //     };
 //   }
-
-  
 // }
+
+// // **MAIN POLLING FUNCTION**
+// async function pollLeadsAndSendToLindy() {
+//   console.log(`\n🔄 Starting LSA polling for last ${POLL_BACK_MINUTES} minutes...`);
+  
+//   const leadsResult = await fetchLSALeadsLastMinutes(POLL_BACK_MINUTES);
+  
+//   if (!leadsResult.success) {
+//     console.error(`❌ Failed to fetch leads: ${leadsResult.error}`);
+//     return;
+//   }
+  
+//   if (leadsResult.count === 0) {
+//     console.log(`📭 No leads found in last ${POLL_BACK_MINUTES} minutes`);
+//     return;
+//   }
+  
+//   console.log(`📬 Processing ${leadsResult.count} leads...`);
+  
+//   const processedLeads = [];
+  
+//   // Process each lead
+//   for (const leadData of leadsResult.leads) {
+//     const lead = leadData.localServicesLead;
+//     console.log(`🔍 Processing lead ${lead.id} (${lead.leadType})`);
+    
+//     // Fetch conversations for MESSAGE type leads to get actual message text
+//     let conversations = [];
+//     if (lead.leadType === 'MESSAGE') {
+//       conversations = await fetchLeadConversations(lead.resourceName);
+//       console.log(`💬 Found ${conversations.length} conversations for lead ${lead.id}`);
+//     }
+    
+//     // Transform for Lindy
+//     const transformedLead = transformLeadForLindy(leadData, conversations);
+//     processedLeads.push(transformedLead);
+//   }
+  
+//   // Send to Lindy
+//   const lindyResults = [];
+//   for (const lead of processedLeads) {
+//     const result = await sendToLindy(lead);
+//     lindyResults.push(result);
+//   }
+  
+//   const sentCount = lindyResults.filter(r => r.success).length;
+//   console.log(`✅ Processing complete: ${sentCount}/${processedLeads.length} sent to Lindy\n`);
+// }
+
+// // ===== API ENDPOINTS =====
+
+// // Manual trigger endpoint
+// app.get('/api/poll-now', async (req, res) => {
+//   try {
+//     await pollLeadsAndSendToLindy();
+//     res.json({
+//       success: true,
+//       message: 'Manual polling completed',
+//       timestamp: new Date().toISOString()
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       error: error.message
+//     });
+//   }
+// });
+
+// // Get leads for last N minutes (for testing)
+// app.get('/api/leads/last/:minutes', async (req, res) => {
+//   const minutes = parseInt(req.params.minutes) || 5;
+  
+//   if (minutes < 1 || minutes > 43200) {
+//     return res.status(400).json({
+//       success: false,
+//       error: 'Minutes must be between 1 and 43200 (30 days)'
+//     });
+//   }
+  
+//   try {
+//     const leadsResult = await fetchLSALeadsLastMinutes(minutes);
+    
+//     if (!leadsResult.success) {
+//       return res.status(500).json(leadsResult);
+//     }
+    
+//     // Process leads for response
+//     const processedLeads = [];
+    
+//     for (const leadData of leadsResult.leads) {
+//       const lead = leadData.localServicesLead;
+      
+//       let conversations = [];
+//       if (lead.leadType === 'MESSAGE') {
+//         conversations = await fetchLeadConversations(lead.resourceName);
+//       }
+      
+//       const transformedLead = transformLeadForLindy(leadData, conversations);
+//       processedLeads.push(transformedLead);
+//     }
+    
+//     res.json({
+//       success: true,
+//       leads: processedLeads,
+//       count: processedLeads.length,
+//       totalCount: leadsResult.totalCount,
+//       phoneLeadsExcluded: leadsResult.phoneLeadsExcluded,
+//       config: {
+//         addPhoneLeads: ADD_PHONE_LEADS === 'true',
+//         pollBackMinutes: POLL_BACK_MINUTES,
+//         pollInterval: POLL_INTERVAL_MINUTES
+//       },
+//       timestamp: new Date().toISOString()
+//     });
+    
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       error: error.message
+//     });
+//   }
+// });
+
+// // Health check
+// app.get('/api/health', async (req, res) => {
+//   try {
+//     const accessToken = await getGoogleAccessToken();
+    
+//     res.json({
+//       status: 'healthy',
+//       timestamp: new Date().toISOString(),
+//       config: {
+//         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
+//         pollBackMinutes: POLL_BACK_MINUTES,
+//         addPhoneLeads: ADD_PHONE_LEADS === 'true',
+//         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
+//         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
+//         customerId: GOOGLE_ADS_CUSTOMER_ID
+//       },
+//       tokenSystem: {
+//         status: 'working',
+//         hasValidToken: !!accessToken,
+//         tokenExpiresAt: new Date(tokenCache.expiresAt).toISOString(),
+//         autoRefreshEnabled: true
+//       }
+//     });
+    
+//   } catch (error) {
+//     res.status(500).json({
+//       status: 'error',
+//       error: error.message
+//     });
+//   }
+// });
+
+// // **DYNAMIC CRON JOB**
+// if (process.env.NODE_ENV !== 'test') {
+//   cron.schedule(`*/${POLL_INTERVAL_MINUTES} * * * *`, async () => {
+//     console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute polling triggered...`);
+//     try {
+//       await pollLeadsAndSendToLindy();
+//     } catch (error) {
+//       console.error('❌ Cron job failed:', error.message);
+//     }
+//   });
+  
+//   console.log(`⏰ Cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
+// }
+
+// app.listen(PORT, () => {
+//   console.log(`🚀 LSA-to-GHL Integration Server running on http://localhost:${PORT}`);
+//   console.log(`📊 Customer ID: ${GOOGLE_ADS_CUSTOMER_ID}`);
+//   console.log(`🔗 Lindy Webhook: ${LINDY_WEBHOOK_URL ? 'Configured ✅' : 'Not configured ❌'}`);
+//   console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min, phone leads: ${ADD_PHONE_LEADS}`);
+//   console.log(`\n📋 API Endpoints:`);
+//   console.log(`   GET  http://localhost:${PORT}/api/health`);
+//   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
+//   console.log(`   GET  http://localhost:${PORT}/api/leads/last/60`);
+// });
+
+// module.exports = app;
+
+
+
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs').promises;
+const cron = require('node-cron');
+const qs = require('querystring');
+
+const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+const PORT = process.env.PORT || 3000;
+
+// ===== ENVIRONMENT VARIABLES =====
+const {
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REFRESH_TOKEN,
+  GOOGLE_ADS_DEVELOPER_TOKEN,
+  GOOGLE_ADS_CUSTOMER_ID,
+  GOOGLE_ADS_LOGIN_CUSTOMER_ID,
+  LINDY_WEBHOOK_URL,
+  // DYNAMIC VARIABLES
+  POLL_INTERVAL_MINUTES = 5,
+  POLL_BACK_MINUTES = 250,
+  ADD_PHONE_LEADS = 'false'
+} = process.env;
+
+// ===== TOKEN MANAGEMENT =====
+let tokenCache = {
+  accessToken: null,
+  expiresAt: 0
+};
+
+async function getGoogleAccessToken() {
+  const now = Date.now();
+  
+  if (tokenCache.accessToken && now < tokenCache.expiresAt - 60000) {
+    console.log('✅ Using cached access token');
+    return tokenCache.accessToken;
+  }
+
+  console.log('🔄 Auto-generating new Google access token...');
+  
+  try {
+    const response = await axios.post(
+      'https://oauth2.googleapis.com/token',
+      qs.stringify({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: GOOGLE_REFRESH_TOKEN,
+        grant_type: 'refresh_token'
+      }),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      }
+    );
+
+    tokenCache.accessToken = response.data.access_token;
+    tokenCache.expiresAt = now + (response.data.expires_in * 1000);
+    
+    console.log(`✅ New access token generated successfully`);
+    return tokenCache.accessToken;
+    
+  } catch (error) {
+    console.error('❌ Failed to generate access token:', error.response?.data || error.message);
+    throw new Error(`Token generation failed: ${error.response?.data?.error_description || error.message}`);
+  }
+}
+
+// **ENHANCED: Fetch leads with full conversation history**
+async function fetchLSALeadsWithConversationHistory(minutes) {
+  const now = new Date();
+  const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
+  
+  console.log(`🔍 Fetching LSA leads + full conversation history for last ${minutes} minutes`);
+  
+  const accessToken = await getGoogleAccessToken();
+  const headers = {
+    'Authorization': `Bearer ${accessToken}`,
+    'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
+    'Content-Type': 'application/json'
+  };
+  
+  if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
+    headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+  }
+
+  const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
+  
+  try {
+    // Step 1: Get ALL conversation history
+    const conversationQuery = `
+      SELECT 
+        local_services_lead_conversation.id,
+        local_services_lead_conversation.lead,
+        local_services_lead_conversation.event_date_time,
+        local_services_lead_conversation.conversation_channel,
+        local_services_lead_conversation.participant_type,
+        local_services_lead_conversation.message_details.text,
+        local_services_lead_conversation.message_details.attachment_urls,
+        local_services_lead_conversation.phone_call_details.call_duration_millis,
+        local_services_lead_conversation.phone_call_details.call_recording_url
+      FROM local_services_lead_conversation 
+      ORDER BY local_services_lead_conversation.event_date_time DESC
+      LIMIT 2000
+    `;
+    
+    const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
+    const allConversations = conversationResponse.data.results || [];
+    
+    // Group conversations by lead
+    const conversationsByLead = {};
+    const recentActivityLeads = new Set();
+    
+    allConversations.forEach(conv => {
+      const conversation = conv.localServicesLeadConversation;
+      const leadResourceName = conversation.lead;
+      const leadId = leadResourceName.split('/').pop();
+      const eventTime = new Date(conversation.eventDateTime);
+      
+      if (!conversationsByLead[leadId]) {
+        conversationsByLead[leadId] = [];
+      }
+      
+      conversationsByLead[leadId].push({
+        id: conversation.id,
+        eventDateTime: conversation.eventDateTime,
+        channel: conversation.conversationChannel,
+        participantType: conversation.participantType,
+        messageText: conversation.messageDetails?.text || '',
+        attachmentUrls: conversation.messageDetails?.attachmentUrls || [],
+        callDuration: conversation.phoneCallDetails?.callDurationMillis || null,
+        callRecordingUrl: conversation.phoneCallDetails?.callRecordingUrl || null
+      });
+      
+      // Mark leads with recent activity
+      if (eventTime >= cutoffTime) {
+        recentActivityLeads.add(leadId);
+      }
+    });
+    
+    console.log(`📊 Found conversations for ${Object.keys(conversationsByLead).length} leads, ${recentActivityLeads.size} with recent activity`);
+    
+    // Step 2: Get all leads with enhanced fields
+    const leadQuery = `
+      SELECT 
+        local_services_lead.lead_type,
+        local_services_lead.category_id, 
+        local_services_lead.service_id,
+        local_services_lead.contact_details,
+        local_services_lead.lead_status,
+        local_services_lead.creation_date_time,
+        local_services_lead.locale,
+        local_services_lead.lead_charged,
+        local_services_lead.credit_details.credit_state,
+        local_services_lead.credit_details.credit_state_last_update_date_time,
+        local_services_lead.id,
+        local_services_lead.resource_name
+      FROM local_services_lead 
+      ORDER BY local_services_lead.creation_date_time DESC
+      LIMIT 500
+    `;
+    
+    const leadResponse = await axios.post(url, { query: leadQuery }, { headers });
+    const allLeads = leadResponse.data.results || [];
+    
+    console.log(`📊 Found ${allLeads.length} total leads`);
+    
+    // Step 3: Filter and enrich leads
+    const enrichedLeads = [];
+    
+    for (const result of allLeads) {
+      const lead = result.localServicesLead;
+      const createdTime = new Date(lead.creationDateTime);
+      const leadConversations = conversationsByLead[lead.id] || [];
+      
+      // Find latest conversation time (last activity)
+      const latestConversationTime = leadConversations.length > 0 
+        ? new Date(Math.max(...leadConversations.map(c => new Date(c.eventDateTime))))
+        : createdTime;
+      
+      const isNewLead = createdTime >= cutoffTime;
+      const hasRecentActivity = recentActivityLeads.has(lead.id);
+      
+      // Include if newly created OR has recent activity
+      if (isNewLead || hasRecentActivity) {
+        // Apply phone lead filtering
+        const includePhoneLeads = ADD_PHONE_LEADS === 'true';
+        if (lead.leadType === 'PHONE_CALL' && !includePhoneLeads) {
+          console.log(`⏭️ Skipping phone lead ${lead.id} (ADD_PHONE_LEADS=false)`);
+          continue;
+        }
+        
+        // Get the most recent consumer message
+        const latestConsumerMessage = leadConversations
+          .filter(c => c.participantType === 'CONSUMER')
+          .sort((a, b) => new Date(b.eventDateTime) - new Date(a.eventDateTime));
+        
+        const messageText = latestConsumerMessage?.messageText || 
+                           (lead.leadType === 'MESSAGE' ? 'Message content not available' : 
+                            lead.leadType === 'PHONE_CALL' ? 'Phone call inquiry' :
+                            `${lead.leadType} inquiry`);
+
+        const contactDetails = lead.contactDetails || {};
+        
+        // **ENHANCED PAYLOAD WITH FULL HISTORY**
+        const enrichedLead = {
+          // Basic lead info
+          leadId: lead.id,
+          leadType: lead.leadType,
+          leadStatus: lead.leadStatus,
+          messageText: messageText,
+          
+          // **TIMING INFORMATION**
+          timing: {
+            creationDateTime: lead.creationDateTime,
+            lastActivityDateTime: latestConversationTime.toISOString(),
+            creditStateLastUpdateDateTime: lead.creditDetails?.creditStateLastUpdateDateTime || null,
+            isNewLead: isNewLead,
+            hasRecentActivity: hasRecentActivity
+          },
+          
+          // **COMPLETE CONVERSATION HISTORY**
+          conversationHistory: {
+            totalConversations: leadConversations.length,
+            conversations: leadConversations.sort((a, b) => new Date(a.eventDateTime) - new Date(b.eventDateTime))
+          },
+          
+          // **LEAD DETAILS**
+          leadDetails: {
+            categoryId: lead.categoryId,
+            serviceId: lead.serviceId,
+            locale: lead.locale,
+            leadCharged: lead.leadCharged,
+            creditState: lead.creditDetails?.creditState || null
+          },
+          
+          // **CONTACT INFORMATION**
+          contactInfo: {
+            name: contactDetails.consumerName || '',
+            phone: contactDetails.phoneNumber || '',
+            email: contactDetails.email || ''
+          },
+          
+          // **GOHIGHLEVEL CONTACT FORMAT**
+          ghlContactData: {
+            locationId: process.env.GHL_LOCATION_ID || 'YOUR_LOCATION_ID',
+            firstName: contactDetails.consumerName || 'LSA Lead',
+            lastName: '',
+            email: contactDetails.email || '',
+            phone: contactDetails.phoneNumber || '',
+            tags: ['lsa-lead', lead.leadType === 'MESSAGE' ? 'message-inquiry' : 'phone-inquiry'],
+            source: 'Google LSA',
+            customFields: [
+              {
+                id: 'LEAD_ID',
+                field_value: lead.id
+              },
+              {
+                id: 'MESSAGE',
+                field_value: messageText
+              },
+              {
+                id: 'LEAD_STATUS',
+                field_value: lead.leadStatus
+              },
+              {
+                id: 'CREATION_TIME',
+                field_value: lead.creationDateTime
+              },
+              {
+                id: 'LAST_ACTIVITY',
+                field_value: latestConversationTime.toISOString()
+              },
+              {
+                id: 'TOTAL_CONVERSATIONS',
+                field_value: leadConversations.length.toString()
+              }
+            ]
+          }
+        };
+        
+        enrichedLeads.push(enrichedLead);
+        
+        if (hasRecentActivity && !isNewLead) {
+          console.log(`🔄 Including lead ${lead.id} due to recent conversation activity (${leadConversations.length} total conversations)`);
+        }
+      }
+    }
+    
+    console.log(`🎯 Processed ${enrichedLeads.length} leads with full conversation history`);
+    
+    return {
+      success: true,
+      leads: enrichedLeads,
+      count: enrichedLeads.length,
+      totalLeadsChecked: allLeads.length,
+      recentActivityCount: recentActivityLeads.size,
+      phoneLeadsExcluded: allLeads.length - enrichedLeads.length
+    };
+    
+  } catch (error) {
+    console.error('❌ Error fetching leads with conversation history:', error.response?.data || error.message);
+    return {
+      success: false,
+      error: error.response?.data?.message || error.message,
+      leads: [],
+      count: 0
+    };
+  }
+}
+
+// **ENHANCED LOGGING**
+function logDetailedPayloadForDebugging(lead) {
+  console.log('\n🚀 DETAILED PAYLOAD BEING SENT TO LINDY:');
+  console.log('='.repeat(50));
+  console.log(`Lead ID: ${lead.leadId}`);
+  console.log(`Lead Type: ${lead.leadType}`);
+  console.log(`Lead Status: ${lead.leadStatus}`);
+  console.log(`Message: "${lead.messageText}"`);
+  console.log(`Created: ${lead.timing.creationDateTime}`);
+  console.log(`Last Activity: ${lead.timing.lastActivityDateTime}`);
+  console.log(`Total Conversations: ${lead.conversationHistory.totalConversations}`);
+  console.log('Recent Conversations:');
+  lead.conversationHistory.conversations.slice(-3).forEach((conv, index) => {
+    console.log(`  ${index + 1}. ${conv.eventDateTime} (${conv.participantType}): ${conv.messageText || conv.channel}`);
+  });
+  console.log(`Contact: ${lead.contactInfo.name} <${lead.contactInfo.email}> ${lead.contactInfo.phone}`);
+  console.log('='.repeat(50));
+}
+
+// **SEND TO LINDY WITH DETAILED PAYLOAD**
 async function sendToLindy(payload) {
   if (!LINDY_WEBHOOK_URL) {
     console.warn('⚠️ Lindy webhook URL not configured');
     return { success: false, error: 'Webhook URL not configured' };
   }
 
-  // 🚀 ADD THIS LINE
-  logLeadPayloadForDebugging(payload);
+  logDetailedPayloadForDebugging(payload);
 
   try {
     const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'LSA-GHL-Integration/1.0'
+        'User-Agent': 'LSA-GHL-Integration/2.0'
       },
-      timeout: 10000
+      timeout: 15000
     });
     
-    console.log(`✅ Sent lead ${payload.leadId} to Lindy: ${response.status}`);
+    console.log(`✅ Sent detailed lead ${payload.leadId} to Lindy: ${response.status}`);
     return { 
       success: true, 
       leadId: payload.leadId,
-      status: response.status
+      status: response.status,
+      conversationCount: payload.conversationHistory.totalConversations
     };
     
   } catch (error) {
@@ -1434,74 +2043,104 @@ async function sendToLindy(payload) {
   }
 }
 
-// **MAIN POLLING FUNCTION**
+// **MAIN POLLING FUNCTION WITH DETAILED RESPONSE**
 async function pollLeadsAndSendToLindy() {
-  console.log(`\n🔄 Starting LSA polling for last ${POLL_BACK_MINUTES} minutes...`);
+  console.log(`\n🔄 Starting enhanced LSA polling for last ${POLL_BACK_MINUTES} minutes...`);
   
-  const leadsResult = await fetchLSALeadsLastMinutes(POLL_BACK_MINUTES);
+  const leadsResult = await fetchLSALeadsWithConversationHistory(POLL_BACK_MINUTES);
   
   if (!leadsResult.success) {
     console.error(`❌ Failed to fetch leads: ${leadsResult.error}`);
-    return;
+    return {
+      success: false,
+      error: leadsResult.error,
+      processed: 0,
+      sent: 0
+    };
   }
   
   if (leadsResult.count === 0) {
     console.log(`📭 No leads found in last ${POLL_BACK_MINUTES} minutes`);
-    return;
+    return {
+      success: true,
+      processed: 0,
+      sent: 0,
+      message: `No leads found in last ${POLL_BACK_MINUTES} minutes`,
+      summary: {
+        totalLeadsChecked: leadsResult.totalLeadsChecked,
+        recentActivityCount: leadsResult.recentActivityCount
+      }
+    };
   }
   
-  console.log(`📬 Processing ${leadsResult.count} leads...`);
-  
-  const processedLeads = [];
-  
-  // Process each lead
-  for (const leadData of leadsResult.leads) {
-    const lead = leadData.localServicesLead;
-    console.log(`🔍 Processing lead ${lead.id} (${lead.leadType})`);
-    
-    // Fetch conversations for MESSAGE type leads to get actual message text
-    let conversations = [];
-    if (lead.leadType === 'MESSAGE') {
-      conversations = await fetchLeadConversations(lead.resourceName);
-      console.log(`💬 Found ${conversations.length} conversations for lead ${lead.id}`);
-    }
-    
-    // Transform for Lindy
-    const transformedLead = transformLeadForLindy(leadData, conversations);
-    processedLeads.push(transformedLead);
-  }
+  console.log(`📬 Processing ${leadsResult.count} enriched leads...`);
   
   // Send to Lindy
   const lindyResults = [];
-  for (const lead of processedLeads) {
+  for (const lead of leadsResult.leads) {
     const result = await sendToLindy(lead);
     lindyResults.push(result);
   }
   
   const sentCount = lindyResults.filter(r => r.success).length;
-  console.log(`✅ Processing complete: ${sentCount}/${processedLeads.length} sent to Lindy\n`);
+  console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy\n`);
+  
+  return {
+    success: true,
+    processed: leadsResult.count,
+    sent: sentCount,
+    failed: leadsResult.count - sentCount,
+    summary: {
+      totalLeadsChecked: leadsResult.totalLeadsChecked,
+      recentActivityCount: leadsResult.recentActivityCount,
+      phoneLeadsExcluded: leadsResult.phoneLeadsExcluded
+    },
+    leadsData: leadsResult.leads, // **INCLUDE FULL DATA FOR POSTMAN RESPONSE**
+    lindyResults: lindyResults,
+    timestamp: new Date().toISOString()
+  };
 }
 
 // ===== API ENDPOINTS =====
 
-// Manual trigger endpoint
+// **ENHANCED: Manual trigger with detailed response**
 app.get('/api/poll-now', async (req, res) => {
   try {
-    await pollLeadsAndSendToLindy();
+    const result = await pollLeadsAndSendToLindy();
+    
+    // **DETAILED POSTMAN RESPONSE**
     res.json({
-      success: true,
-      message: 'Manual polling completed',
-      timestamp: new Date().toISOString()
+      success: result.success,
+      message: result.error || 'Enhanced polling completed with conversation history',
+      timestamp: new Date().toISOString(),
+      statistics: {
+        processed: result.processed,
+        sentToLindy: result.sent,
+        failed: result.failed,
+        totalLeadsChecked: result.summary?.totalLeadsChecked,
+        recentActivityCount: result.summary?.recentActivityCount,
+        phoneLeadsExcluded: result.summary?.phoneLeadsExcluded
+      },
+      // **FULL DATA SENT TO LINDY (for Postman visibility)**
+      leadsDataSentToLindy: result.leadsData || [],
+      lindyWebhookResults: result.lindyResults || [],
+      config: {
+        pollBackMinutes: POLL_BACK_MINUTES,
+        addPhoneLeads: ADD_PHONE_LEADS === 'true',
+        webhookConfigured: !!LINDY_WEBHOOK_URL
+      }
     });
+    
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 });
 
-// Get leads for last N minutes (for testing)
+// **ENHANCED: Get leads with full conversation history**
 app.get('/api/leads/last/:minutes', async (req, res) => {
   const minutes = parseInt(req.params.minutes) || 5;
   
@@ -1513,34 +2152,23 @@ app.get('/api/leads/last/:minutes', async (req, res) => {
   }
   
   try {
-    const leadsResult = await fetchLSALeadsLastMinutes(minutes);
+    const leadsResult = await fetchLSALeadsWithConversationHistory(minutes);
     
     if (!leadsResult.success) {
       return res.status(500).json(leadsResult);
     }
     
-    // Process leads for response
-    const processedLeads = [];
-    
-    for (const leadData of leadsResult.leads) {
-      const lead = leadData.localServicesLead;
-      
-      let conversations = [];
-      if (lead.leadType === 'MESSAGE') {
-        conversations = await fetchLeadConversations(lead.resourceName);
-      }
-      
-      const transformedLead = transformLeadForLindy(leadData, conversations);
-      processedLeads.push(transformedLead);
-    }
-    
     res.json({
       success: true,
-      leads: processedLeads,
-      count: processedLeads.length,
-      totalCount: leadsResult.totalCount,
-      phoneLeadsExcluded: leadsResult.phoneLeadsExcluded,
+      leadsWithFullHistory: leadsResult.leads,
+      count: leadsResult.count,
+      statistics: {
+        totalLeadsChecked: leadsResult.totalLeadsChecked,
+        recentActivityCount: leadsResult.recentActivityCount,
+        phoneLeadsExcluded: leadsResult.phoneLeadsExcluded
+      },
       config: {
+        minutesBack: minutes,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         pollBackMinutes: POLL_BACK_MINUTES,
         pollInterval: POLL_INTERVAL_MINUTES
@@ -1564,6 +2192,12 @@ app.get('/api/health', async (req, res) => {
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
+      features: [
+        'Enhanced conversation history tracking',
+        'Detailed timing information',
+        'Full webhook payload with conversation data',
+        'Postman-friendly detailed responses'
+      ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
         pollBackMinutes: POLL_BACK_MINUTES,
@@ -1588,10 +2222,10 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// **DYNAMIC CRON JOB**
+// **CRON JOB**
 if (process.env.NODE_ENV !== 'test') {
   cron.schedule(`*/${POLL_INTERVAL_MINUTES} * * * *`, async () => {
-    console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute polling triggered...`);
+    console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute enhanced polling triggered...`);
     try {
       await pollLeadsAndSendToLindy();
     } catch (error) {
@@ -1599,14 +2233,19 @@ if (process.env.NODE_ENV !== 'test') {
     }
   });
   
-  console.log(`⏰ Cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
+  console.log(`⏰ Enhanced cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
 }
 
 app.listen(PORT, () => {
-  console.log(`🚀 LSA-to-GHL Integration Server running on http://localhost:${PORT}`);
+  console.log(`🚀 Enhanced LSA-to-GHL Integration Server running on http://localhost:${PORT}`);
   console.log(`📊 Customer ID: ${GOOGLE_ADS_CUSTOMER_ID}`);
   console.log(`🔗 Lindy Webhook: ${LINDY_WEBHOOK_URL ? 'Configured ✅' : 'Not configured ❌'}`);
   console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min, phone leads: ${ADD_PHONE_LEADS}`);
+  console.log(`\n🎯 Enhanced Features:`);
+  console.log(`   ✅ Full conversation history tracking`);
+  console.log(`   ✅ Detailed timing information (creation + last activity)`);
+  console.log(`   ✅ Enhanced webhook payload with conversation data`);
+  console.log(`   ✅ Postman-friendly detailed API responses`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
