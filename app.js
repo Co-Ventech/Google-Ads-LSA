@@ -253,7 +253,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             lastName: '',
             email: contactDetails.email || '',
             phone: contactDetails.phoneNumber || '',
-            tags: ['lsa-lead', lead.leadType === 'MESSAGE' ? 'message-inquiry' : 'phone-inquiry'],
+            tags: ['google lsa message lead', lead.leadType === 'MESSAGE' ? 'message-inquiry' : 'phone-inquiry'],
             source: 'Google LSA',
             customFields: [
               {
