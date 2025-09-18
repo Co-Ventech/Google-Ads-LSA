@@ -333,11 +333,37 @@ function logDetailedPayloadForDebugging(lead) {
   console.log('='.repeat(50));
 }
 
-// **SEND TO LINDY WITH DETAILED PAYLOAD**
+// **ENHANCED SEND TO LINDY WITH DUPLICATE PREVENTION**
 async function sendToLindy(payload) {
   if (!LINDY_WEBHOOK_URL) {
     console.warn('⚠️ Lindy webhook URL not configured');
     return { success: false, error: 'Webhook URL not configured' };
+  }
+
+  // **BOT REPLY LOOP PREVENTION**
+  // Check if the last message in conversation history is from ADVERTISER
+  if (payload.conversationHistory && payload.conversationHistory.conversations.length > 0) {
+    const lastMessage = payload.conversationHistory.conversations[payload.conversationHistory.conversations.length - 1];
+    
+    if (lastMessage.participantType === 'ADVERTISER') {
+      console.log(`🚫 Skipping lead ${payload.leadId} - Last message is from ADVERTISER (bot reply), preventing loop`);
+      console.log(`   Last message: "${lastMessage.messageText.substring(0, 100)}..."`);
+      console.log(`   Event time: ${lastMessage.eventDateTime}`);
+      console.log(`   Channel: ${lastMessage.channel}`);
+      
+      return { 
+        success: false, 
+        leadId: payload.leadId,
+        error: 'Skipped - Last message from ADVERTISER (preventing bot reply loop)',
+        skippedReason: 'ADVERTISER_LAST_MESSAGE',
+        lastMessageDetails: {
+          participantType: lastMessage.participantType,
+          channel: lastMessage.channel,
+          eventDateTime: lastMessage.eventDateTime,
+          messagePreview: lastMessage.messageText.substring(0, 100)
+        }
+      };
+    }
   }
 
   logDetailedPayloadForDebugging(payload);
@@ -369,7 +395,7 @@ async function sendToLindy(payload) {
   }
 }
 
-// **MAIN POLLING FUNCTION WITH DETAILED RESPONSE**
+// **MAIN POLLING FUNCTION WITH ENHANCED REPORTING**
 async function pollLeadsAndSendToLindy() {
   console.log(`\n🔄 Starting enhanced LSA polling for last ${POLL_BACK_MINUTES} minutes...`);
   
@@ -381,7 +407,8 @@ async function pollLeadsAndSendToLindy() {
       success: false,
       error: leadsResult.error,
       processed: 0,
-      sent: 0
+      sent: 0,
+      skipped: 0
     };
   }
   
@@ -391,6 +418,7 @@ async function pollLeadsAndSendToLindy() {
       success: true,
       processed: 0,
       sent: 0,
+      skipped: 0,
       message: `No leads found in last ${POLL_BACK_MINUTES} minutes`,
       summary: {
         totalLeadsChecked: leadsResult.totalLeadsChecked,
@@ -401,27 +429,37 @@ async function pollLeadsAndSendToLindy() {
   
   console.log(`📬 Processing ${leadsResult.count} enriched leads...`);
   
-  // Send to Lindy
+  // Send to Lindy with loop prevention
   const lindyResults = [];
+  let skippedCount = 0;
+  
   for (const lead of leadsResult.leads) {
     const result = await sendToLindy(lead);
     lindyResults.push(result);
+    
+    if (!result.success && result.skippedReason === 'ADVERTISER_LAST_MESSAGE') {
+      skippedCount++;
+    }
   }
   
   const sentCount = lindyResults.filter(r => r.success).length;
-  console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy\n`);
+  const failedCount = leadsResult.count - sentCount - skippedCount;
+  
+  console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy, ${skippedCount} skipped (bot loop prevention), ${failedCount} failed\n`);
   
   return {
     success: true,
     processed: leadsResult.count,
     sent: sentCount,
-    failed: leadsResult.count - sentCount,
+    skipped: skippedCount,
+    failed: failedCount,
     summary: {
       totalLeadsChecked: leadsResult.totalLeadsChecked,
       recentActivityCount: leadsResult.recentActivityCount,
-      phoneLeadsExcluded: leadsResult.phoneLeadsExcluded
+      phoneLeadsExcluded: leadsResult.phoneLeadsExcluded,
+      botLoopsPrevented: skippedCount
     },
-    leadsData: leadsResult.leads, // **INCLUDE FULL DATA FOR POSTMAN RESPONSE**
+    leadsData: leadsResult.leads,
     lindyResults: lindyResults,
     timestamp: new Date().toISOString()
   };
@@ -429,31 +467,37 @@ async function pollLeadsAndSendToLindy() {
 
 // ===== API ENDPOINTS =====
 
-// **ENHANCED: Manual trigger with detailed response**
+// **ENHANCED: Manual trigger with detailed response including skip tracking**
 app.get('/api/poll-now', async (req, res) => {
   try {
     const result = await pollLeadsAndSendToLindy();
     
-    // **DETAILED POSTMAN RESPONSE**
+    // **DETAILED POSTMAN RESPONSE WITH SKIP TRACKING**
     res.json({
       success: result.success,
-      message: result.error || 'Enhanced polling completed with conversation history',
+      message: result.error || 'Enhanced polling completed with bot loop prevention',
       timestamp: new Date().toISOString(),
       statistics: {
         processed: result.processed,
         sentToLindy: result.sent,
+        skippedBotLoops: result.skipped,
         failed: result.failed,
         totalLeadsChecked: result.summary?.totalLeadsChecked,
         recentActivityCount: result.summary?.recentActivityCount,
-        phoneLeadsExcluded: result.summary?.phoneLeadsExcluded
+        phoneLeadsExcluded: result.summary?.phoneLeadsExcluded,
+        botLoopsPrevented: result.summary?.botLoopsPrevented
       },
-      // **FULL DATA SENT TO LINDY (for Postman visibility)**
-      leadsDataSentToLindy: result.leadsData || [],
+      // **SHOW WHICH LEADS WERE SKIPPED**
+      skippedLeads: result.lindyResults?.filter(r => r.skippedReason === 'ADVERTISER_LAST_MESSAGE') || [],
+      leadsDataSentToLindy: result.leadsData?.filter((lead, index) => 
+        result.lindyResults?.[index]?.success
+      ) || [],
       lindyWebhookResults: result.lindyResults || [],
       config: {
         pollBackMinutes: POLL_BACK_MINUTES,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
-        webhookConfigured: !!LINDY_WEBHOOK_URL
+        webhookConfigured: !!LINDY_WEBHOOK_URL,
+        botLoopPreventionEnabled: true
       }
     });
     
