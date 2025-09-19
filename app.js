@@ -249,7 +249,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
           // **GOHIGHLEVEL CONTACT FORMAT**
           ghlContactData: {
             locationId: process.env.GHL_LOCATION_ID || 'YOUR_LOCATION_ID',
-            firstName: contactDetails.consumerName || 'LSA Lead',
+            firstName: contactDetails.consumerName,
             lastName: '',
             email: contactDetails.email || '',
             phone: contactDetails.phoneNumber || '',
