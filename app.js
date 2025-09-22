@@ -1,5 +1,3 @@
-
-
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -24,16 +22,74 @@ const {
   GOOGLE_ADS_LOGIN_CUSTOMER_ID,
   LINDY_WEBHOOK_URL,
   // DYNAMIC VARIABLES
-  POLL_INTERVAL_MINUTES ,
+  POLL_INTERVAL_MINUTES,
   POLL_BACK_MINUTES,
   ADD_PHONE_LEADS
 } = process.env;
+
+// **NEW: TIMEZONE OFFSET CONFIGURATION**
+const TIMEZONE_OFFSET_HOURS = parseInt(process.env.TIMEZONE_OFFSET_HOURS) || 4;
 
 // ===== TOKEN MANAGEMENT =====
 let tokenCache = {
   accessToken: null,
   expiresAt: 0
 };
+
+// **NEW: TIMEZONE HELPER FUNCTIONS =====
+function addClientTimezoneOffset(dateString) {
+  if (!dateString) return null;
+  
+  // Parse the date (handle both formats from Google API)
+  let date;
+  if (dateString.includes('T')) {
+    // ISO format: "2025-09-21T15:33:11.784Z"
+    date = new Date(dateString);
+  } else {
+    // Google format: "2025-09-21 15:33:11.784172"
+    date = new Date(dateString);
+  }
+  
+  // Add timezone offset hours to match client timezone expectation
+  date.setHours(date.getHours() + TIMEZONE_OFFSET_HOURS);
+  
+  return date.toISOString();
+}
+
+function adjustTimingObject(timing) {
+  return {
+    ...timing,
+    creationDateTime: addClientTimezoneOffset(timing.creationDateTime),
+    lastActivityDateTime: addClientTimezoneOffset(timing.lastActivityDateTime),
+    creditStateLastUpdateDateTime: addClientTimezoneOffset(timing.creditStateLastUpdateDateTime)
+  };
+}
+
+function adjustConversationHistory(conversationHistory) {
+  if (!conversationHistory || !conversationHistory.conversations) {
+    return conversationHistory;
+  }
+  
+  return {
+    ...conversationHistory,
+    conversations: conversationHistory.conversations.map(conv => ({
+      ...conv,
+      eventDateTime: addClientTimezoneOffset(conv.eventDateTime)
+    }))
+  };
+}
+
+function adjustCustomFields(customFields) {
+  return customFields.map(field => {
+    if (field.id === 'CREATION_TIME' || field.id === 'LAST_ACTIVITY') {
+      return {
+        ...field,
+        field_value: addClientTimezoneOffset(field.field_value)
+      };
+    }
+    return field;
+  });
+}
 
 async function getGoogleAccessToken() {
   const now = Date.now();
@@ -333,7 +389,7 @@ function logDetailedPayloadForDebugging(lead) {
   console.log('='.repeat(50));
 }
 
-// **ENHANCED SEND TO LINDY WITH DUPLICATE PREVENTION**
+// **MODIFIED: ENHANCED SEND TO LINDY WITH TIMEZONE CORRECTION**
 async function sendToLindy(payload) {
   if (!LINDY_WEBHOOK_URL) {
     console.warn('⚠️ Lindy webhook URL not configured');
@@ -341,7 +397,6 @@ async function sendToLindy(payload) {
   }
 
   // **BOT REPLY LOOP PREVENTION**
-  // Check if the last message in conversation history is from ADVERTISER
   if (payload.conversationHistory && payload.conversationHistory.conversations.length > 0) {
     const lastMessage = payload.conversationHistory.conversations[payload.conversationHistory.conversations.length - 1];
     
@@ -366,10 +421,27 @@ async function sendToLindy(payload) {
     }
   }
 
-  logDetailedPayloadForDebugging(payload);
+  // **NEW: APPLY TIMEZONE CORRECTION**
+  const correctedPayload = {
+    ...payload,
+    timing: adjustTimingObject(payload.timing),
+    conversationHistory: adjustConversationHistory(payload.conversationHistory),
+    ghlContactData: {
+      ...payload.ghlContactData,
+      customFields: adjustCustomFields(payload.ghlContactData.customFields)
+    }
+  };
+
+  console.log(`\n🕐 ${TIMEZONE_OFFSET_HOURS}-HOUR TIMEZONE CORRECTION APPLIED:`);
+  console.log(`Original creation time: ${payload.timing.creationDateTime}`);
+  console.log(`Corrected creation time: ${correctedPayload.timing.creationDateTime}`);
+  console.log(`Original last activity: ${payload.timing.lastActivityDateTime}`);
+  console.log(`Corrected last activity: ${correctedPayload.timing.lastActivityDateTime}`);
+
+  logDetailedPayloadForDebugging(correctedPayload);
 
   try {
-    const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
+    const response = await axios.post(LINDY_WEBHOOK_URL, correctedPayload, {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'LSA-GHL-Integration/2.0'
@@ -377,19 +449,20 @@ async function sendToLindy(payload) {
       timeout: 15000
     });
     
-    console.log(`✅ Sent detailed lead ${payload.leadId} to Lindy: ${response.status}`);
+    console.log(`✅ Sent timezone-corrected lead ${correctedPayload.leadId} to Lindy: ${response.status}`);
     return { 
       success: true, 
-      leadId: payload.leadId,
+      leadId: correctedPayload.leadId,
       status: response.status,
-      conversationCount: payload.conversationHistory.totalConversations
+      conversationCount: correctedPayload.conversationHistory.totalConversations,
+      timezoneOffset: `+${TIMEZONE_OFFSET_HOURS} hours applied`
     };
     
   } catch (error) {
-    console.error(`❌ Failed to send lead ${payload.leadId} to Lindy:`, error.message);
+    console.error(`❌ Failed to send lead ${correctedPayload.leadId} to Lindy:`, error.message);
     return { 
       success: false, 
-      leadId: payload.leadId,
+      leadId: correctedPayload.leadId,
       error: error.message
     };
   }
@@ -497,7 +570,8 @@ app.get('/api/poll-now', async (req, res) => {
         pollBackMinutes: POLL_BACK_MINUTES,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         webhookConfigured: !!LINDY_WEBHOOK_URL,
-        botLoopPreventionEnabled: true
+        botLoopPreventionEnabled: true,
+        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
       }
     });
     
@@ -541,7 +615,8 @@ app.get('/api/leads/last/:minutes', async (req, res) => {
         minutesBack: minutes,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         pollBackMinutes: POLL_BACK_MINUTES,
-        pollInterval: POLL_INTERVAL_MINUTES
+        pollInterval: POLL_INTERVAL_MINUTES,
+        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
       },
       timestamp: new Date().toISOString()
     });
@@ -566,7 +641,8 @@ app.get('/api/health', async (req, res) => {
         'Enhanced conversation history tracking',
         'Detailed timing information',
         'Full webhook payload with conversation data',
-        'Postman-friendly detailed responses'
+        'Postman-friendly detailed responses',
+        'Timezone correction for client compatibility'
       ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
@@ -574,7 +650,8 @@ app.get('/api/health', async (req, res) => {
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
-        customerId: GOOGLE_ADS_CUSTOMER_ID
+        customerId: GOOGLE_ADS_CUSTOMER_ID,
+        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
       },
       tokenSystem: {
         status: 'working',
@@ -611,11 +688,13 @@ app.listen(PORT, () => {
   console.log(`📊 Customer ID: ${GOOGLE_ADS_CUSTOMER_ID}`);
   console.log(`🔗 Lindy Webhook: ${LINDY_WEBHOOK_URL ? 'Configured ✅' : 'Not configured ❌'}`);
   console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min, phone leads: ${ADD_PHONE_LEADS}`);
+  console.log(`🕐 Timezone: Adding ${TIMEZONE_OFFSET_HOURS} hours to all timestamps`);
   console.log(`\n🎯 Enhanced Features:`);
   console.log(`   ✅ Full conversation history tracking`);
   console.log(`   ✅ Detailed timing information (creation + last activity)`);
   console.log(`   ✅ Enhanced webhook payload with conversation data`);
   console.log(`   ✅ Postman-friendly detailed API responses`);
+  console.log(`   ✅ Timezone correction for client compatibility`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
