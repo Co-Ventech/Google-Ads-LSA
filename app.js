@@ -1,8 +1,7 @@
+
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const path = require('path');
-const fs = require('fs').promises;
 const cron = require('node-cron');
 const qs = require('querystring');
 
@@ -21,14 +20,10 @@ const {
   GOOGLE_ADS_CUSTOMER_ID,
   GOOGLE_ADS_LOGIN_CUSTOMER_ID,
   LINDY_WEBHOOK_URL,
-  // DYNAMIC VARIABLES
   POLL_INTERVAL_MINUTES,
   POLL_BACK_MINUTES,
   ADD_PHONE_LEADS
 } = process.env;
-
-// **NEW: TIMEZONE OFFSET CONFIGURATION**
-const TIMEZONE_OFFSET_HOURS = parseInt(process.env.TIMEZONE_OFFSET_HOURS) || 4;
 
 // ===== TOKEN MANAGEMENT =====
 let tokenCache = {
@@ -36,59 +31,62 @@ let tokenCache = {
   expiresAt: 0
 };
 
-// **NEW: TIMEZONE HELPER FUNCTIONS =====
-function addClientTimezoneOffset(dateString) {
-  if (!dateString) return null;
-  
-  // Parse the date (handle both formats from Google API)
-  let date;
-  if (dateString.includes('T')) {
-    // ISO format: "2025-09-21T15:33:11.784Z"
-    date = new Date(dateString);
-  } else {
-    // Google format: "2025-09-21 15:33:11.784172"
-    date = new Date(dateString);
-  }
-  
-  // Add timezone offset hours to match client timezone expectation
-  date.setHours(date.getHours() + TIMEZONE_OFFSET_HOURS);
-  
-  return date.toISOString();
-}
-
-function adjustTimingObject(timing) {
-  return {
-    ...timing,
-    creationDateTime: addClientTimezoneOffset(timing.creationDateTime),
-    lastActivityDateTime: addClientTimezoneOffset(timing.lastActivityDateTime),
-    creditStateLastUpdateDateTime: addClientTimezoneOffset(timing.creditStateLastUpdateDateTime)
-  };
-}
-
-function adjustConversationHistory(conversationHistory) {
-  if (!conversationHistory || !conversationHistory.conversations) {
-    return conversationHistory;
-  }
-  
-  return {
-    ...conversationHistory,
-    conversations: conversationHistory.conversations.map(conv => ({
-      ...conv,
-      eventDateTime: addClientTimezoneOffset(conv.eventDateTime)
-    }))
-  };
-}
-
-function adjustCustomFields(customFields) {
-  return customFields.map(field => {
-    if (field.id === 'CREATION_TIME' || field.id === 'LAST_ACTIVITY') {
-      return {
-        ...field,
-        field_value: addClientTimezoneOffset(field.field_value)
-      };
-    }
-    return field;
+// ===== TIME FUNCTIONS =====
+function getCurrentEdtTime() {
+  const now = new Date();
+  const edtFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
   });
+  
+  const parts = edtFormatter.formatToParts(now);
+  const dateParts = {};
+  parts.forEach(part => {
+    if (part.type !== 'literal') {
+      dateParts[part.type] = part.value;
+    }
+  });
+  
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}T${dateParts.hour}:${dateParts.minute}:${dateParts.second}-04:00`;
+}
+
+function getCurrentEdtTimeFormatted() {
+  const now = new Date();
+  return now.toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  }) + ' EDT';
+}
+
+function getCurrentTimestamp() {
+  return Date.now();
+}
+
+function getCalendarParameters(daysAhead = 4) {
+  const currentTimestamp = getCurrentTimestamp();
+  const startDate = currentTimestamp;
+  const endDate = currentTimestamp + (daysAhead * 24 * 60 * 60 * 1000);
+  
+  return {
+    startDate: startDate,
+    endDate: endDate,
+    startDateISO: new Date(startDate).toISOString(),
+    endDateISO: new Date(endDate).toISOString(),
+    timezone: 'America/New_York'
+  };
 }
 
 async function getGoogleAccessToken() {
@@ -127,7 +125,7 @@ async function getGoogleAccessToken() {
   }
 }
 
-// **ENHANCED: Fetch leads with full conversation history**
+// ===== FETCH LEADS WITH FULL CONVERSATION HISTORY =====
 async function fetchLSALeadsWithConversationHistory(minutes) {
   const now = new Date();
   const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
@@ -193,7 +191,6 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
         callRecordingUrl: conversation.phoneCallDetails?.callRecordingUrl || null
       });
       
-      // Mark leads with recent activity
       if (eventTime >= cutoffTime) {
         recentActivityLeads.add(leadId);
       }
@@ -201,7 +198,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     
     console.log(`📊 Found conversations for ${Object.keys(conversationsByLead).length} leads, ${recentActivityLeads.size} with recent activity`);
     
-    // Step 2: Get all leads with enhanced fields
+    // Step 2: Get all leads
     const leadQuery = `
       SELECT 
         local_services_lead.lead_type,
@@ -228,13 +225,16 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     
     // Step 3: Filter and enrich leads
     const enrichedLeads = [];
+    const currentTimestamp = getCurrentTimestamp();
+    const currentEdtTime = getCurrentEdtTime();
+    const currentEdtTimeFormatted = getCurrentEdtTimeFormatted();
+    const calendarParams = getCalendarParameters(4);
     
     for (const result of allLeads) {
       const lead = result.localServicesLead;
       const createdTime = new Date(lead.creationDateTime);
       const leadConversations = conversationsByLead[lead.id] || [];
       
-      // Find latest conversation time (last activity)
       const latestConversationTime = leadConversations.length > 0 
         ? new Date(Math.max(...leadConversations.map(c => new Date(c.eventDateTime))))
         : createdTime;
@@ -242,19 +242,16 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
       const isNewLead = createdTime >= cutoffTime;
       const hasRecentActivity = recentActivityLeads.has(lead.id);
       
-      // Include if newly created OR has recent activity
       if (isNewLead || hasRecentActivity) {
-        // Apply phone lead filtering
         const includePhoneLeads = ADD_PHONE_LEADS === 'true';
         if (lead.leadType === 'PHONE_CALL' && !includePhoneLeads) {
-          console.log(`⏭️ Skipping phone lead ${lead.id} (ADD_PHONE_LEADS=false)`);
+          console.log(`⏭️ Skipping phone lead ${lead.id}`);
           continue;
         }
         
-        // Get the most recent consumer message
         const latestConsumerMessage = leadConversations
           .filter(c => c.participantType === 'CONSUMER')
-          .sort((a, b) => new Date(b.eventDateTime) - new Date(a.eventDateTime));
+          .sort((a, b) => new Date(b.eventDateTime) - new Date(a.eventDateTime))[0];
         
         const messageText = latestConsumerMessage?.messageText || 
                            (lead.leadType === 'MESSAGE' ? 'Message content not available' : 
@@ -263,30 +260,30 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
 
         const contactDetails = lead.contactDetails || {};
         
-        // **ENHANCED PAYLOAD WITH FULL HISTORY**
         const enrichedLead = {
-          // Basic lead info
           leadId: lead.id,
           leadType: lead.leadType,
           leadStatus: lead.leadStatus,
           messageText: messageText,
           
-          // **TIMING INFORMATION**
           timing: {
             creationDateTime: lead.creationDateTime,
             lastActivityDateTime: latestConversationTime.toISOString(),
             creditStateLastUpdateDateTime: lead.creditDetails?.creditStateLastUpdateDateTime || null,
             isNewLead: isNewLead,
-            hasRecentActivity: hasRecentActivity
+            hasRecentActivity: hasRecentActivity,
+            currentEdtTime: currentEdtTime,
+            currentEdtTimeFormatted: currentEdtTimeFormatted,
+            currentTimestamp: currentTimestamp
           },
           
-          // **COMPLETE CONVERSATION HISTORY**
+          calendarParams: calendarParams,
+          
           conversationHistory: {
             totalConversations: leadConversations.length,
             conversations: leadConversations.sort((a, b) => new Date(a.eventDateTime) - new Date(b.eventDateTime))
           },
           
-          // **LEAD DETAILS**
           leadDetails: {
             categoryId: lead.categoryId,
             serviceId: lead.serviceId,
@@ -295,47 +292,30 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             creditState: lead.creditDetails?.creditState || null
           },
           
-          // **CONTACT INFORMATION**
           contactInfo: {
             name: contactDetails.consumerName || '',
             phone: contactDetails.phoneNumber || '',
             email: contactDetails.email || ''
           },
           
-          // **GOHIGHLEVEL CONTACT FORMAT**
           ghlContactData: {
-            locationId: process.env.GHL_LOCATION_ID || 'YOUR_LOCATION_ID',
-            firstName: contactDetails.consumerName,
+            locationId: process.env.GHL_LOCATION_ID || 'uVlhM6VHsupswi3yUiOZ',
+            firstName: contactDetails.consumerName || '',
             lastName: '',
             email: contactDetails.email || '',
             phone: contactDetails.phoneNumber || '',
             tags: ['google lsa message lead', lead.leadType === 'MESSAGE' ? 'message-inquiry' : 'phone-inquiry'],
             source: 'Google LSA',
             customFields: [
-              {
-                id: 'LEAD_ID',
-                field_value: lead.id
-              },
-              {
-                id: 'MESSAGE',
-                field_value: messageText
-              },
-              {
-                id: 'LEAD_STATUS',
-                field_value: lead.leadStatus
-              },
-              {
-                id: 'CREATION_TIME',
-                field_value: lead.creationDateTime
-              },
-              {
-                id: 'LAST_ACTIVITY',
-                field_value: latestConversationTime.toISOString()
-              },
-              {
-                id: 'TOTAL_CONVERSATIONS',
-                field_value: leadConversations.length.toString()
-              }
+              { id: 'LEAD_ID', field_value: lead.id },
+              { id: 'MESSAGE', field_value: messageText },
+              { id: 'LEAD_STATUS', field_value: lead.leadStatus },
+              { id: 'CREATION_TIME', field_value: lead.creationDateTime },
+              { id: 'LAST_ACTIVITY', field_value: latestConversationTime.toISOString() },
+              { id: 'TOTAL_CONVERSATIONS', field_value: leadConversations.length.toString() },
+              { id: 'CURRENT_EDT_TIME', field_value: currentEdtTime },
+              { id: 'CALENDAR_START_DATE', field_value: calendarParams.startDate.toString() },
+              { id: 'CALENDAR_END_DATE', field_value: calendarParams.endDate.toString() }
             ]
           }
         };
@@ -348,19 +328,18 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
       }
     }
     
-    console.log(`🎯 Processed ${enrichedLeads.length} leads with full conversation history`);
+    console.log(`🎯 Processed ${enrichedLeads.length} leads`);
     
     return {
       success: true,
       leads: enrichedLeads,
       count: enrichedLeads.length,
       totalLeadsChecked: allLeads.length,
-      recentActivityCount: recentActivityLeads.size,
-      phoneLeadsExcluded: allLeads.length - enrichedLeads.length
+      recentActivityCount: recentActivityLeads.size
     };
     
   } catch (error) {
-    console.error('❌ Error fetching leads with conversation history:', error.response?.data || error.message);
+    console.error('❌ Error fetching leads:', error.response?.data || error.message);
     return {
       success: false,
       error: error.response?.data?.message || error.message,
@@ -370,78 +349,33 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
   }
 }
 
-// **ENHANCED LOGGING**
-function logDetailedPayloadForDebugging(lead) {
-  console.log('\n🚀 DETAILED PAYLOAD BEING SENT TO LINDY:');
-  console.log('='.repeat(50));
-  console.log(`Lead ID: ${lead.leadId}`);
-  console.log(`Lead Type: ${lead.leadType}`);
-  console.log(`Lead Status: ${lead.leadStatus}`);
-  console.log(`Message: "${lead.messageText}"`);
-  console.log(`Created: ${lead.timing.creationDateTime}`);
-  console.log(`Last Activity: ${lead.timing.lastActivityDateTime}`);
-  console.log(`Total Conversations: ${lead.conversationHistory.totalConversations}`);
-  console.log('Recent Conversations:');
-  lead.conversationHistory.conversations.slice(-3).forEach((conv, index) => {
-    console.log(`  ${index + 1}. ${conv.eventDateTime} (${conv.participantType}): ${conv.messageText || conv.channel}`);
-  });
-  console.log(`Contact: ${lead.contactInfo.name} <${lead.contactInfo.email}> ${lead.contactInfo.phone}`);
-  console.log('='.repeat(50));
-}
-
-// **MODIFIED: ENHANCED SEND TO LINDY WITH TIMEZONE CORRECTION**
+// ===== SEND TO LINDY =====
 async function sendToLindy(payload) {
   if (!LINDY_WEBHOOK_URL) {
     console.warn('⚠️ Lindy webhook URL not configured');
     return { success: false, error: 'Webhook URL not configured' };
   }
 
-  // **BOT REPLY LOOP PREVENTION**
+  // Bot loop prevention
   if (payload.conversationHistory && payload.conversationHistory.conversations.length > 0) {
     const lastMessage = payload.conversationHistory.conversations[payload.conversationHistory.conversations.length - 1];
     
     if (lastMessage.participantType === 'ADVERTISER') {
-      console.log(`🚫 Skipping lead ${payload.leadId} - Last message is from ADVERTISER (bot reply), preventing loop`);
-      console.log(`   Last message: "${lastMessage.messageText.substring(0, 100)}..."`);
-      console.log(`   Event time: ${lastMessage.eventDateTime}`);
-      console.log(`   Channel: ${lastMessage.channel}`);
-      
+      console.log(`🚫 Skipping lead ${payload.leadId} - Last message from ADVERTISER (preventing loop)`);
       return { 
         success: false, 
         leadId: payload.leadId,
-        error: 'Skipped - Last message from ADVERTISER (preventing bot reply loop)',
-        skippedReason: 'ADVERTISER_LAST_MESSAGE',
-        lastMessageDetails: {
-          participantType: lastMessage.participantType,
-          channel: lastMessage.channel,
-          eventDateTime: lastMessage.eventDateTime,
-          messagePreview: lastMessage.messageText.substring(0, 100)
-        }
+        error: 'Skipped - preventing bot loop'
       };
     }
   }
 
-  // **NEW: APPLY TIMEZONE CORRECTION**
-  const correctedPayload = {
-    ...payload,
-    timing: adjustTimingObject(payload.timing),
-    conversationHistory: adjustConversationHistory(payload.conversationHistory),
-    ghlContactData: {
-      ...payload.ghlContactData,
-      customFields: adjustCustomFields(payload.ghlContactData.customFields)
-    }
-  };
-
-  console.log(`\n🕐 ${TIMEZONE_OFFSET_HOURS}-HOUR TIMEZONE CORRECTION APPLIED:`);
-  console.log(`Original creation time: ${payload.timing.creationDateTime}`);
-  console.log(`Corrected creation time: ${correctedPayload.timing.creationDateTime}`);
-  console.log(`Original last activity: ${payload.timing.lastActivityDateTime}`);
-  console.log(`Corrected last activity: ${correctedPayload.timing.lastActivityDateTime}`);
-
-  logDetailedPayloadForDebugging(correctedPayload);
+  console.log(`📤 Sending lead ${payload.leadId} to Lindy`);
+  console.log(`   Message: "${payload.messageText.substring(0, 100)}..."`);
+  console.log(`   Current EDT: ${payload.timing.currentEdtTimeFormatted}`);
 
   try {
-    const response = await axios.post(LINDY_WEBHOOK_URL, correctedPayload, {
+    const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'LSA-GHL-Integration/2.0'
@@ -449,28 +383,26 @@ async function sendToLindy(payload) {
       timeout: 15000
     });
     
-    console.log(`✅ Sent timezone-corrected lead ${correctedPayload.leadId} to Lindy: ${response.status}`);
+    console.log(`✅ Sent lead ${payload.leadId} to Lindy: ${response.status}`);
     return { 
       success: true, 
-      leadId: correctedPayload.leadId,
-      status: response.status,
-      conversationCount: correctedPayload.conversationHistory.totalConversations,
-      timezoneOffset: `+${TIMEZONE_OFFSET_HOURS} hours applied`
+      leadId: payload.leadId,
+      status: response.status
     };
     
   } catch (error) {
-    console.error(`❌ Failed to send lead ${correctedPayload.leadId} to Lindy:`, error.message);
+    console.error(`❌ Failed to send lead ${payload.leadId}:`, error.message);
     return { 
       success: false, 
-      leadId: correctedPayload.leadId,
+      leadId: payload.leadId,
       error: error.message
     };
   }
 }
 
-// **MAIN POLLING FUNCTION WITH ENHANCED REPORTING**
+// ===== MAIN POLLING FUNCTION =====
 async function pollLeadsAndSendToLindy() {
-  console.log(`\n🔄 Starting enhanced LSA polling for last ${POLL_BACK_MINUTES} minutes...`);
+  console.log(`\n🔄 Starting polling for last ${POLL_BACK_MINUTES} minutes...`);
   
   const leadsResult = await fetchLSALeadsWithConversationHistory(POLL_BACK_MINUTES);
   
@@ -480,8 +412,7 @@ async function pollLeadsAndSendToLindy() {
       success: false,
       error: leadsResult.error,
       processed: 0,
-      sent: 0,
-      skipped: 0
+      sent: 0
     };
   }
   
@@ -491,47 +422,27 @@ async function pollLeadsAndSendToLindy() {
       success: true,
       processed: 0,
       sent: 0,
-      skipped: 0,
-      message: `No leads found in last ${POLL_BACK_MINUTES} minutes`,
-      summary: {
-        totalLeadsChecked: leadsResult.totalLeadsChecked,
-        recentActivityCount: leadsResult.recentActivityCount
-      }
+      message: 'No leads found'
     };
   }
   
-  console.log(`📬 Processing ${leadsResult.count} enriched leads...`);
+  console.log(`📬 Processing ${leadsResult.count} leads...`);
   
-  // Send to Lindy with loop prevention
   const lindyResults = [];
-  let skippedCount = 0;
   
   for (const lead of leadsResult.leads) {
     const result = await sendToLindy(lead);
     lindyResults.push(result);
-    
-    if (!result.success && result.skippedReason === 'ADVERTISER_LAST_MESSAGE') {
-      skippedCount++;
-    }
   }
   
   const sentCount = lindyResults.filter(r => r.success).length;
-  const failedCount = leadsResult.count - sentCount - skippedCount;
   
-  console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy, ${skippedCount} skipped (bot loop prevention), ${failedCount} failed\n`);
+  console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy\n`);
   
   return {
     success: true,
     processed: leadsResult.count,
     sent: sentCount,
-    skipped: skippedCount,
-    failed: failedCount,
-    summary: {
-      totalLeadsChecked: leadsResult.totalLeadsChecked,
-      recentActivityCount: leadsResult.recentActivityCount,
-      phoneLeadsExcluded: leadsResult.phoneLeadsExcluded,
-      botLoopsPrevented: skippedCount
-    },
     leadsData: leadsResult.leads,
     lindyResults: lindyResults,
     timestamp: new Date().toISOString()
@@ -540,38 +451,24 @@ async function pollLeadsAndSendToLindy() {
 
 // ===== API ENDPOINTS =====
 
-// **ENHANCED: Manual trigger with detailed response including skip tracking**
 app.get('/api/poll-now', async (req, res) => {
   try {
     const result = await pollLeadsAndSendToLindy();
     
-    // **DETAILED POSTMAN RESPONSE WITH SKIP TRACKING**
     res.json({
       success: result.success,
-      message: result.error || 'Enhanced polling completed with bot loop prevention',
+      message: result.error || 'Polling completed',
       timestamp: new Date().toISOString(),
       statistics: {
         processed: result.processed,
-        sentToLindy: result.sent,
-        skippedBotLoops: result.skipped,
-        failed: result.failed,
-        totalLeadsChecked: result.summary?.totalLeadsChecked,
-        recentActivityCount: result.summary?.recentActivityCount,
-        phoneLeadsExcluded: result.summary?.phoneLeadsExcluded,
-        botLoopsPrevented: result.summary?.botLoopsPrevented
+        sentToLindy: result.sent
       },
-      // **SHOW WHICH LEADS WERE SKIPPED**
-      skippedLeads: result.lindyResults?.filter(r => r.skippedReason === 'ADVERTISER_LAST_MESSAGE') || [],
-      leadsDataSentToLindy: result.leadsData?.filter((lead, index) => 
-        result.lindyResults?.[index]?.success
-      ) || [],
-      lindyWebhookResults: result.lindyResults || [],
+      leadsData: result.leadsData || [],
       config: {
         pollBackMinutes: POLL_BACK_MINUTES,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         webhookConfigured: !!LINDY_WEBHOOK_URL,
-        botLoopPreventionEnabled: true,
-        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
+        calendarDaysAhead: 4
       }
     });
     
@@ -584,52 +481,6 @@ app.get('/api/poll-now', async (req, res) => {
   }
 });
 
-// **ENHANCED: Get leads with full conversation history**
-app.get('/api/leads/last/:minutes', async (req, res) => {
-  const minutes = parseInt(req.params.minutes) || 5;
-  
-  if (minutes < 1 || minutes > 43200) {
-    return res.status(400).json({
-      success: false,
-      error: 'Minutes must be between 1 and 43200 (30 days)'
-    });
-  }
-  
-  try {
-    const leadsResult = await fetchLSALeadsWithConversationHistory(minutes);
-    
-    if (!leadsResult.success) {
-      return res.status(500).json(leadsResult);
-    }
-    
-    res.json({
-      success: true,
-      leadsWithFullHistory: leadsResult.leads,
-      count: leadsResult.count,
-      statistics: {
-        totalLeadsChecked: leadsResult.totalLeadsChecked,
-        recentActivityCount: leadsResult.recentActivityCount,
-        phoneLeadsExcluded: leadsResult.phoneLeadsExcluded
-      },
-      config: {
-        minutesBack: minutes,
-        addPhoneLeads: ADD_PHONE_LEADS === 'true',
-        pollBackMinutes: POLL_BACK_MINUTES,
-        pollInterval: POLL_INTERVAL_MINUTES,
-        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
-      },
-      timestamp: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Health check
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
@@ -640,9 +491,10 @@ app.get('/api/health', async (req, res) => {
       features: [
         'Enhanced conversation history tracking',
         'Detailed timing information',
+        'Current EDT time for slot validation',
+        'Calendar parameters for 4-day range',
         'Full webhook payload with conversation data',
-        'Postman-friendly detailed responses',
-        'Timezone correction for client compatibility'
+        'Bot loop prevention'
       ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
@@ -651,13 +503,11 @@ app.get('/api/health', async (req, res) => {
         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
         customerId: GOOGLE_ADS_CUSTOMER_ID,
-        timezoneOffsetHours: TIMEZONE_OFFSET_HOURS
+        calendarDaysAhead: 4
       },
       tokenSystem: {
         status: 'working',
-        hasValidToken: !!accessToken,
-        tokenExpiresAt: new Date(tokenCache.expiresAt).toISOString(),
-        autoRefreshEnabled: true
+        hasValidToken: !!accessToken
       }
     });
     
@@ -669,10 +519,11 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// **CRON JOB**
+// ===== CRON JOB =====
+
 if (process.env.NODE_ENV !== 'test') {
   cron.schedule(`*/${POLL_INTERVAL_MINUTES} * * * *`, async () => {
-    console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute enhanced polling triggered...`);
+    console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute polling triggered...`);
     try {
       await pollLeadsAndSendToLindy();
     } catch (error) {
@@ -680,25 +531,24 @@ if (process.env.NODE_ENV !== 'test') {
     }
   });
   
-  console.log(`⏰ Enhanced cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
+  console.log(`⏰ Cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
 }
 
+// ===== START SERVER =====
+
 app.listen(PORT, () => {
-  console.log(`🚀 Enhanced LSA-to-GHL Integration Server running on http://localhost:${PORT}`);
+  console.log(`\n🚀 LSA-to-Lindy Integration Server running on http://localhost:${PORT}`);
   console.log(`📊 Customer ID: ${GOOGLE_ADS_CUSTOMER_ID}`);
   console.log(`🔗 Lindy Webhook: ${LINDY_WEBHOOK_URL ? 'Configured ✅' : 'Not configured ❌'}`);
-  console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min, phone leads: ${ADD_PHONE_LEADS}`);
-  console.log(`🕐 Timezone: Adding ${TIMEZONE_OFFSET_HOURS} hours to all timestamps`);
-  console.log(`\n🎯 Enhanced Features:`);
+  console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min`);
+  console.log(`\n🎯 Features:`);
+  console.log(`   ✅ Current EDT time for AI slot validation`);
+  console.log(`   ✅ 4-day calendar range (weekend filtering)`);
   console.log(`   ✅ Full conversation history tracking`);
-  console.log(`   ✅ Detailed timing information (creation + last activity)`);
-  console.log(`   ✅ Enhanced webhook payload with conversation data`);
-  console.log(`   ✅ Postman-friendly detailed API responses`);
-  console.log(`   ✅ Timezone correction for client compatibility`);
+  console.log(`   ✅ Bot loop prevention`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
-  console.log(`   GET  http://localhost:${PORT}/api/leads/last/60`);
 });
 
 module.exports = app;
