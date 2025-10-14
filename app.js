@@ -4,8 +4,11 @@ const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const qs = require('querystring');
+const cors = require('cors'); // If you don't have it: npm install cors
+
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -75,7 +78,7 @@ function getCurrentTimestamp() {
   return Date.now();
 }
 
-function getCalendarParameters(daysAhead = 4) {
+function getCalendarParameters(daysAhead = 3) {
   const currentTimestamp = getCurrentTimestamp();
   const startDate = currentTimestamp;
   const endDate = currentTimestamp + (daysAhead * 24 * 60 * 60 * 1000);
@@ -228,7 +231,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     const currentTimestamp = getCurrentTimestamp();
     const currentEdtTime = getCurrentEdtTime();
     const currentEdtTimeFormatted = getCurrentEdtTimeFormatted();
-    const calendarParams = getCalendarParameters(4);
+    const calendarParams = getCalendarParameters(3);
     
     for (const result of allLeads) {
       const lead = result.localServicesLead;
@@ -468,7 +471,7 @@ app.get('/api/poll-now', async (req, res) => {
         pollBackMinutes: POLL_BACK_MINUTES,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         webhookConfigured: !!LINDY_WEBHOOK_URL,
-        calendarDaysAhead: 4
+        calendarDaysAhead: 3
       }
     });
     
@@ -477,6 +480,47 @@ app.get('/api/poll-now', async (req, res) => {
       success: false,
       error: error.message,
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+
+app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
+  console.log('📅 Auto-proxy called');
+  
+  // Generate timestamps on the backend instead
+  const currentTimestamp = Date.now();
+  const startDate = currentTimestamp;
+  const endDate = currentTimestamp + (3 * 24 * 60 * 60 * 1000); // ✅ Changed from 3 to 4
+  
+  const calendarId = req.query.calendarId;
+  const authToken = process.env.GHL_ACCESS_TOKEN;
+  
+  console.log(`🔢 Using timestamps: startDate=${startDate}, endDate=${endDate}`);
+  
+  try {
+    const response = await axios.get(
+      `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots`,
+      {
+        params: {
+          startDate: startDate,
+          endDate: endDate
+        },
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+          'Version': '2021-04-15'
+        }
+      }
+    );
+    
+    console.log('✅ Calendar slots retrieved');
+    res.json(response.data);
+    
+  } catch (error) {
+    console.error('❌ GHL API error:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      error: error.response?.data || { message: error.message }
     });
   }
 });
@@ -503,7 +547,7 @@ app.get('/api/health', async (req, res) => {
         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
         customerId: GOOGLE_ADS_CUSTOMER_ID,
-        calendarDaysAhead: 4
+        calendarDaysAhead: 3
       },
       tokenSystem: {
         status: 'working',
