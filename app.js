@@ -4,8 +4,7 @@ const express = require('express');
 const axios = require('axios');
 const cron = require('node-cron');
 const qs = require('querystring');
-const cors = require('cors'); // If you don't have it: npm install cors
-
+const cors = require('cors');
 
 const app = express();
 app.use(cors());
@@ -149,7 +148,6 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
   const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
   
   try {
-    // Step 1: Get ALL conversation history
     const conversationQuery = `
       SELECT 
         local_services_lead_conversation.id,
@@ -169,7 +167,6 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
     const allConversations = conversationResponse.data.results || [];
     
-    // Group conversations by lead
     const conversationsByLead = {};
     const recentActivityLeads = new Set();
     
@@ -201,7 +198,6 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     
     console.log(`📊 Found conversations for ${Object.keys(conversationsByLead).length} leads, ${recentActivityLeads.size} with recent activity`);
     
-    // Step 2: Get all leads
     const leadQuery = `
       SELECT 
         local_services_lead.lead_type,
@@ -226,7 +222,6 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     
     console.log(`📊 Found ${allLeads.length} total leads`);
     
-    // Step 3: Filter and enrich leads
     const enrichedLeads = [];
     const currentTimestamp = getCurrentTimestamp();
     const currentEdtTime = getCurrentEdtTime();
@@ -359,7 +354,6 @@ async function sendToLindy(payload) {
     return { success: false, error: 'Webhook URL not configured' };
   }
 
-  // Bot loop prevention
   if (payload.conversationHistory && payload.conversationHistory.conversations.length > 0) {
     const lastMessage = payload.conversationHistory.conversations[payload.conversationHistory.conversations.length - 1];
     
@@ -452,6 +446,89 @@ async function pollLeadsAndSendToLindy() {
   };
 }
 
+// ===== NEW: MONITORING FUNCTION =====
+async function monitorStuckConversations() {
+  console.log('\n🔍 ========================================');
+  console.log('🔍 MONITORING: Checking for stuck workflows...');
+  console.log('🔍 ========================================');
+  
+  const { sendStuckLeadAlert } = require('./emailService');
+  
+  // Monitor last 60 minutes only (not 242 - we only want recent stuck leads)
+  const leadsResult = await fetchLSALeadsWithConversationHistory(250);
+  
+  if (!leadsResult.success || leadsResult.count === 0) {
+    console.log('📭 No leads to monitor');
+    return { success: true, stuckLeads: [], checked: 0 };
+  }
+  
+  const stuckLeads = [];
+  const now = Date.now();
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+  
+  for (const lead of leadsResult.leads) {
+    const conversations = lead.conversationHistory.conversations;
+    
+    if (conversations.length === 0) continue;
+    
+    const lastMessage = conversations[conversations.length - 1];
+    const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
+    const minutesSinceLastMessage = Math.floor((now - lastMessageTime) / 60000);
+    const timeDiff = now - lastMessageTime;
+    
+    if (lastMessage.participantType === 'CONSUMER' && timeDiff > TEN_MINUTES_MS) {
+      console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
+      console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
+      console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
+      console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
+      console.log(`   └─ Message: "${lastMessage.messageText.substring(0, 60)}..."`);
+      
+      stuckLeads.push({
+        ...lead,
+        minutesSinceLastMessage: minutesSinceLastMessage,
+        lastMessageFrom: lastMessage.participantType,
+        lastMessageText: lastMessage.messageText,
+        lastMessageTime: lastMessage.eventDateTime
+      });
+    }
+  }
+  
+  console.log(`\n📊 Monitoring Results:`);
+  console.log(`   Total leads checked: ${leadsResult.count}`);
+  console.log(`   Stuck leads found: ${stuckLeads.length}`);
+  
+  if (stuckLeads.length > 0) {
+    console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
+    
+    const emailResult = await sendStuckLeadAlert(stuckLeads);
+    
+    if (emailResult.statusCode === 200) {
+      console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
+      console.log(`   Message ID: ${emailResult.messageId}`);
+    } else {
+      console.log(`❌ Email alert failed: ${emailResult.message}`);
+    }
+    
+    return {
+      success: true,
+      stuckLeads: stuckLeads,
+      checked: leadsResult.count,
+      emailSent: emailResult.statusCode === 200
+    };
+    
+  } else {
+    console.log(`✅ All conversations are healthy - no alerts needed`);
+    
+    return {
+      success: true,
+      stuckLeads: [],
+      checked: leadsResult.count,
+      emailSent: false,
+      message: 'All conversations healthy ✅'
+    };
+  }
+}
+
 // ===== API ENDPOINTS =====
 
 app.get('/api/poll-now', async (req, res) => {
@@ -484,14 +561,52 @@ app.get('/api/poll-now', async (req, res) => {
   }
 });
 
+// NEW: Monitoring endpoint
+app.get('/api/monitor-stuck', async (req, res) => {
+  try {
+    console.log('\n🔍 Manual monitoring check triggered via API...\n');
+    const result = await monitorStuckConversations();
+    
+    res.json({
+      success: result.success,
+      message: result.message || `Monitoring completed`,
+      timestamp: new Date().toISOString(),
+      statistics: {
+        totalChecked: result.checked,
+        stuckLeadsFound: result.stuckLeads.length,
+        emailSent: result.emailSent
+      },
+      stuckLeads: result.stuckLeads.map(lead => ({
+        leadId: lead.leadId,
+        customerName: lead.contactInfo.name || 'Unknown',
+        phone: lead.contactInfo.phone || 'N/A',
+        minutesWaiting: lead.minutesSinceLastMessage,
+        lastMessage: lead.lastMessageText.substring(0, 100) + '...',
+        lastActivity: lead.timing.lastActivityDateTime
+      })),
+      config: {
+        threshold: '10 minutes',
+        checkInterval: '10 minutes',
+        emailAlertsEnabled: true
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Monitoring API error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
   console.log('📅 Auto-proxy called');
   
-  // Generate timestamps on the backend instead
   const currentTimestamp = Date.now();
   const startDate = currentTimestamp;
-  const endDate = currentTimestamp + (3 * 24 * 60 * 60 * 1000); // ✅ Changed from 3 to 4
+  const endDate = currentTimestamp + (3 * 24 * 60 * 60 * 1000);
   
   const calendarId = req.query.calendarId;
   const authToken = process.env.GHL_ACCESS_TOKEN;
@@ -538,7 +653,9 @@ app.get('/api/health', async (req, res) => {
         'Current EDT time for slot validation',
         'Calendar parameters for 4-day range',
         'Full webhook payload with conversation data',
-        'Bot loop prevention'
+        'Bot loop prevention',
+        '🆕 Stuck lead monitoring (10-minute threshold)',
+        '🆕 Email alerts for missed responses'
       ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
@@ -547,7 +664,8 @@ app.get('/api/health', async (req, res) => {
         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
         customerId: GOOGLE_ADS_CUSTOMER_ID,
-        calendarDaysAhead: 3
+        calendarDaysAhead: 3,
+        monitoringEnabled: true
       },
       tokenSystem: {
         status: 'working',
@@ -563,9 +681,10 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ===== CRON JOB =====
+// ===== CRON JOBS =====
 
 if (process.env.NODE_ENV !== 'test') {
+  // Existing polling cron (every 2 minutes, looks back 242 minutes)
   cron.schedule(`*/${POLL_INTERVAL_MINUTES} * * * *`, async () => {
     console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute polling triggered...`);
     try {
@@ -574,8 +693,40 @@ if (process.env.NODE_ENV !== 'test') {
       console.error('❌ Cron job failed:', error.message);
     }
   });
+  console.log(`⏰ Polling cron scheduled: Every ${POLL_INTERVAL_MINUTES} minutes (looking back ${POLL_BACK_MINUTES} min)`);
   
-  console.log(`⏰ Cron job scheduled: Every ${POLL_INTERVAL_MINUTES} minutes`);
+  // NEW: Monitoring cron (every 10 minutes, looks back 60 minutes)
+  cron.schedule('*/10 * * * *', async () => {
+    console.log('\n═══════════════════════════════════════════════════════');
+    console.log('🔍 AUTOMATED MONITORING CHECK');
+    console.log(`⏰ Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT`);
+    console.log('═══════════════════════════════════════════════════════');
+    
+    try {
+      const result = await monitorStuckConversations();
+      
+      console.log('\n📋 MONITORING SUMMARY:');
+      console.log(`   ├─ Leads Checked: ${result.checked}`);
+      console.log(`   ├─ Stuck Leads: ${result.stuckLeads.length}`);
+      console.log(`   └─ Email Sent: ${result.emailSent ? 'YES ✅' : 'NO ⏸️'}`);
+      
+      if (result.stuckLeads.length > 0) {
+        console.log('\n🚨 ALERT: Email notification sent');
+        console.log(`   Recipient: ${process.env.NOTIFICATION_EMAIL}`);
+        result.stuckLeads.forEach(lead => {
+          console.log(`   • Lead ${lead.leadId}: ${lead.minutesSinceLastMessage} min wait`);
+        });
+      }
+      
+      console.log('═══════════════════════════════════════════════════════\n');
+      
+    } catch (error) {
+      console.error('❌ [MONITORING ERROR]:', error.message);
+      console.log('═══════════════════════════════════════════════════════\n');
+    }
+  });
+  
+  console.log('⏰ Monitoring cron scheduled: Every 10 minutes (checking last 60 min for stuck leads)\n');
 }
 
 // ===== START SERVER =====
@@ -590,9 +741,12 @@ app.listen(PORT, () => {
   console.log(`   ✅ 4-day calendar range (weekend filtering)`);
   console.log(`   ✅ Full conversation history tracking`);
   console.log(`   ✅ Bot loop prevention`);
+  console.log(`   ✅ Stuck lead monitoring (10-minute threshold)`);
+  console.log(`   ✅ Email alerts for missed responses`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
+  console.log(`   GET  http://localhost:${PORT}/api/monitor-stuck`);
 });
 
 module.exports = app;
