@@ -27,6 +27,14 @@ const {
   ADD_PHONE_LEADS
 } = process.env;
 
+// ===== MONITORING CONFIGURATION =====
+const MONITORING_CONFIG = {
+  intervalMinutes: parseInt(process.env.MONITOR_INTERVAL_MINUTES) || 10,
+  stuckThresholdMinutes: parseInt(process.env.MONITOR_STUCK_THRESHOLD_MINUTES) || 10,
+  maxMessageAgeMinutes: parseInt(process.env.MONITOR_MAX_MESSAGE_AGE_MINUTES) || 15,
+  lookbackMinutes: parseInt(process.env.MONITOR_LOOKBACK_MINUTES) || 250
+};
+
 // ===== TOKEN MANAGEMENT =====
 let tokenCache = {
   accessToken: null,
@@ -454,8 +462,7 @@ async function monitorStuckConversations() {
   
   const { sendStuckLeadAlert } = require('./emailService');
   
-  // Monitor last 60 minutes only (not 242 - we only want recent stuck leads)
-  const leadsResult = await fetchLSALeadsWithConversationHistory(250);
+  const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
   
   if (!leadsResult.success || leadsResult.count === 0) {
     console.log('📭 No leads to monitor');
@@ -464,7 +471,8 @@ async function monitorStuckConversations() {
   
   const stuckLeads = [];
   const now = Date.now();
-  const TEN_MINUTES_MS = 10 * 60 * 1000;
+  const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
+  const MAX_MESSAGE_AGE_MS = MONITORING_CONFIG.maxMessageAgeMinutes * 60 * 1000;
   
   for (const lead of leadsResult.leads) {
     const conversations = lead.conversationHistory.conversations;
@@ -476,7 +484,13 @@ async function monitorStuckConversations() {
     const minutesSinceLastMessage = Math.floor((now - lastMessageTime) / 60000);
     const timeDiff = now - lastMessageTime;
     
-    if (lastMessage.participantType === 'CONSUMER' && timeDiff > TEN_MINUTES_MS) {
+    // Skip old messages (prevents false alerts on 240-minute-old messages)
+    if (timeDiff > MAX_MESSAGE_AGE_MS) {
+      console.log(`⏭️ Skipping lead ${lead.leadId} - Message too old (${minutesSinceLastMessage} min)`);
+      continue;
+    }
+    
+    if (lastMessage.participantType === 'CONSUMER' && timeDiff > STUCK_THRESHOLD_MS) {
       console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
       console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
       console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
@@ -585,9 +599,11 @@ app.get('/api/monitor-stuck', async (req, res) => {
         lastActivity: lead.timing.lastActivityDateTime
       })),
       config: {
-        threshold: '10 minutes',
-        checkInterval: '10 minutes',
-        emailAlertsEnabled: true
+        threshold: `${MONITORING_CONFIG.stuckThresholdMinutes} minutes`,
+  checkInterval: `${MONITORING_CONFIG.intervalMinutes} minutes`,
+  maxMessageAge: `${MONITORING_CONFIG.maxMessageAgeMinutes} minutes`,
+  lookbackMinutes: MONITORING_CONFIG.lookbackMinutes,
+  emailAlertsEnabled: true
       }
     });
     
@@ -654,18 +670,24 @@ app.get('/api/health', async (req, res) => {
         'Calendar parameters for 4-day range',
         'Full webhook payload with conversation data',
         'Bot loop prevention',
-        '🆕 Stuck lead monitoring (10-minute threshold)',
+        `🆕 Stuck lead monitoring (${MONITORING_CONFIG.stuckThresholdMinutes}-minute threshold)`,  // ← DYNAMIC
         '🆕 Email alerts for missed responses'
       ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
-        pollBackMinutes: POLL_BACK_MINUTES,
-        addPhoneLeads: ADD_PHONE_LEADS === 'true',
-        hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
-        hasLindyWebhook: !!LINDY_WEBHOOK_URL,
-        customerId: GOOGLE_ADS_CUSTOMER_ID,
-        calendarDaysAhead: 3,
-        monitoringEnabled: true
+  pollBackMinutes: POLL_BACK_MINUTES,
+  addPhoneLeads: ADD_PHONE_LEADS === 'true',
+  hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
+  hasLindyWebhook: !!LINDY_WEBHOOK_URL,
+  customerId: GOOGLE_ADS_CUSTOMER_ID,
+  calendarDaysAhead: 3,
+  monitoring: {  // ← ADD THIS
+    enabled: true,
+    intervalMinutes: MONITORING_CONFIG.intervalMinutes,
+    stuckThresholdMinutes: MONITORING_CONFIG.stuckThresholdMinutes,
+    maxMessageAgeMinutes: MONITORING_CONFIG.maxMessageAgeMinutes,
+    lookbackMinutes: MONITORING_CONFIG.lookbackMinutes
+  }
       },
       tokenSystem: {
         status: 'working',
@@ -696,7 +718,7 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`⏰ Polling cron scheduled: Every ${POLL_INTERVAL_MINUTES} minutes (looking back ${POLL_BACK_MINUTES} min)`);
   
   // NEW: Monitoring cron (every 10 minutes, looks back 60 minutes)
-  cron.schedule('*/10 * * * *', async () => {
+  cron.schedule(`*/${MONITORING_CONFIG.intervalMinutes} * * * *`, async () => {
     console.log('\n═══════════════════════════════════════════════════════');
     console.log('🔍 AUTOMATED MONITORING CHECK');
     console.log(`⏰ Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT`);
@@ -726,7 +748,7 @@ if (process.env.NODE_ENV !== 'test') {
     }
   });
   
-  console.log('⏰ Monitoring cron scheduled: Every 10 minutes (checking last 60 min for stuck leads)\n');
+  console.log(`⏰ Monitoring cron scheduled: Every ${MONITORING_CONFIG.intervalMinutes} minutes (checking last ${MONITORING_CONFIG.lookbackMinutes} min for stuck leads)\n`);
 }
 
 // ===== START SERVER =====
@@ -741,7 +763,7 @@ app.listen(PORT, () => {
   console.log(`   ✅ 4-day calendar range (weekend filtering)`);
   console.log(`   ✅ Full conversation history tracking`);
   console.log(`   ✅ Bot loop prevention`);
-  console.log(`   ✅ Stuck lead monitoring (10-minute threshold)`);
+  console.log(`   ✅ Stuck lead monitoring (${MONITORING_CONFIG.stuckThresholdMinutes}-minute threshold)`);
   console.log(`   ✅ Email alerts for missed responses`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
