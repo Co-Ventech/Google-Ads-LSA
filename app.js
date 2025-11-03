@@ -454,7 +454,95 @@ async function pollLeadsAndSendToLindy() {
   };
 }
 
-// ===== NEW: MONITORING FUNCTION =====
+// // ===== NEW: MONITORING FUNCTION =====
+// async function monitorStuckConversations() {
+//   console.log('\n🔍 ========================================');
+//   console.log('🔍 MONITORING: Checking for stuck workflows...');
+//   console.log('🔍 ========================================');
+  
+//   const { sendStuckLeadAlert } = require('./emailService');
+  
+//   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
+  
+//   if (!leadsResult.success || leadsResult.count === 0) {
+//     console.log('📭 No leads to monitor');
+//     return { success: true, stuckLeads: [], checked: 0 };
+//   }
+  
+//   const stuckLeads = [];
+//   const now = Date.now();
+//   const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
+//   const MAX_MESSAGE_AGE_MS = MONITORING_CONFIG.maxMessageAgeMinutes * 60 * 1000;
+  
+//   for (const lead of leadsResult.leads) {
+//     const conversations = lead.conversationHistory.conversations;
+    
+//     if (conversations.length === 0) continue;
+    
+//     const lastMessage = conversations[conversations.length - 1];
+//     const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
+//     const minutesSinceLastMessage = Math.floor((now - lastMessageTime) / 60000);
+//     const timeDiff = now - lastMessageTime;
+    
+//     // Skip old messages (prevents false alerts on 240-minute-old messages)
+//     if (timeDiff > MAX_MESSAGE_AGE_MS) {
+//       console.log(`⏭️ Skipping lead ${lead.leadId} - Message too old (${minutesSinceLastMessage} min)`);
+//       continue;
+//     }
+    
+//     if (lastMessage.participantType === 'CONSUMER' && timeDiff > STUCK_THRESHOLD_MS) {
+//       console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
+//       console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
+//       console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
+//       console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
+//       console.log(`   └─ Message: "${lastMessage.messageText.substring(0, 60)}..."`);
+      
+//       stuckLeads.push({
+//         ...lead,
+//         minutesSinceLastMessage: minutesSinceLastMessage,
+//         lastMessageFrom: lastMessage.participantType,
+//         lastMessageText: lastMessage.messageText,
+//         lastMessageTime: lastMessage.eventDateTime
+//       });
+//     }
+//   }
+  
+//   console.log(`\n📊 Monitoring Results:`);
+//   console.log(`   Total leads checked: ${leadsResult.count}`);
+//   console.log(`   Stuck leads found: ${stuckLeads.length}`);
+  
+//   if (stuckLeads.length > 0) {
+//     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
+    
+//     const emailResult = await sendStuckLeadAlert(stuckLeads);
+    
+//     if (emailResult.statusCode === 200) {
+//       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
+//       console.log(`   Message ID: ${emailResult.messageId}`);
+//     } else {
+//       console.log(`❌ Email alert failed: ${emailResult.message}`);
+//     }
+    
+//     return {
+//       success: true,
+//       stuckLeads: stuckLeads,
+//       checked: leadsResult.count,
+//       emailSent: emailResult.statusCode === 200
+//     };
+    
+//   } else {
+//     console.log(`✅ All conversations are healthy - no alerts needed`);
+    
+//     return {
+//       success: true,
+//       stuckLeads: [],
+//       checked: leadsResult.count,
+//       emailSent: false,
+//       message: 'All conversations healthy ✅'
+//     };
+//   }
+// }
+// ===== CORRECTED: MONITORING FUNCTION =====
 async function monitorStuckConversations() {
   console.log('\n🔍 ========================================');
   console.log('🔍 MONITORING: Checking for stuck workflows...');
@@ -472,38 +560,55 @@ async function monitorStuckConversations() {
   const stuckLeads = [];
   const now = Date.now();
   const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
-  const MAX_MESSAGE_AGE_MS = MONITORING_CONFIG.maxMessageAgeMinutes * 60 * 1000;
   
   for (const lead of leadsResult.leads) {
     const conversations = lead.conversationHistory.conversations;
     
     if (conversations.length === 0) continue;
     
-    const lastMessage = conversations[conversations.length - 1];
-    const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
-    const minutesSinceLastMessage = Math.floor((now - lastMessageTime) / 60000);
-    const timeDiff = now - lastMessageTime;
+    // ✅ FIND THE LAST CONSUMER MESSAGE (not the last message overall)
+    const lastConsumerMessage = conversations
+      .slice()
+      .reverse()
+      .find(c => c.participantType === 'CONSUMER');
     
-    // Skip old messages (prevents false alerts on 240-minute-old messages)
-    if (timeDiff > MAX_MESSAGE_AGE_MS) {
-      console.log(`⏭️ Skipping lead ${lead.leadId} - Message too old (${minutesSinceLastMessage} min)`);
+    if (!lastConsumerMessage) {
+      console.log(`⏭️ Skipping lead ${lead.leadId} - No consumer messages found`);
       continue;
     }
     
-    if (lastMessage.participantType === 'CONSUMER' && timeDiff > STUCK_THRESHOLD_MS) {
-      console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
-      console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
-      console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-      console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
-      console.log(`   └─ Message: "${lastMessage.messageText.substring(0, 60)}..."`);
+    const lastConsumerMessageTime = new Date(lastConsumerMessage.eventDateTime).getTime();
+    const minutesSinceLastConsumerMessage = Math.floor((now - lastConsumerMessageTime) / 60000);
+    const timeDiff = now - lastConsumerMessageTime;
+    
+    // ✅ CHECK: Has it been > 10 minutes since the LAST CONSUMER message?
+    if (timeDiff > STUCK_THRESHOLD_MS) {
       
-      stuckLeads.push({
-        ...lead,
-        minutesSinceLastMessage: minutesSinceLastMessage,
-        lastMessageFrom: lastMessage.participantType,
-        lastMessageText: lastMessage.messageText,
-        lastMessageTime: lastMessage.eventDateTime
-      });
+      // ✅ NOW check if there's an AI response AFTER that consumer message
+      const hasAIResponseAfterConsumer = conversations
+        .filter(c => new Date(c.eventDateTime).getTime() > lastConsumerMessageTime)
+        .some(c => c.participantType === 'ADVERTISER');
+      
+      // ✅ ONLY alert if: Consumer message is old AND NO AI response after it
+      if (!hasAIResponseAfterConsumer) {
+        console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
+        console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
+        console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
+        console.log(`   ├─ Waiting: ${minutesSinceLastConsumerMessage} minutes`);
+        console.log(`   ├─ Last Consumer Message: "${lastConsumerMessage.messageText.substring(0, 60)}..."`);
+        console.log(`   └─ Last Consumer Message Time: ${new Date(lastConsumerMessage.eventDateTime).toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT`);
+        
+        stuckLeads.push({
+          ...lead,
+          minutesSinceLastMessage: minutesSinceLastConsumerMessage,
+          lastMessageFrom: 'CONSUMER',
+          lastMessageText: lastConsumerMessage.messageText,
+          lastMessageTime: lastConsumerMessage.eventDateTime,
+          hasAIResponse: false
+        });
+      } else {
+        console.log(`✅ Lead ${lead.leadId} - AI already responded (${minutesSinceLastConsumerMessage} min ago, but response received)`);
+      }
     }
   }
   
