@@ -14,13 +14,15 @@ const transporter = nodemailer.createTransport({
 
 // Send stuck lead alert
 async function sendStuckLeadAlert(stuckLeads) {
+    const minutesThreshold = parseInt(process.env.MONITOR_STUCK_THRESHOLD_MINUTES) || 15;
+    
     try {
         const leadsSummary = stuckLeads.map(lead => `
             <div style="background: #fff3cd; padding: 15px; margin: 10px 0; border-left: 4px solid #ffc107; border-radius: 5px;">
                 <p><strong>🚨 Lead ID:</strong> ${lead.leadId}</p>
                 <p><strong>Customer:</strong> ${lead.contactInfo.name || 'Unknown'}</p>
                 <p><strong>Phone:</strong> ${lead.contactInfo.phone || 'N/A'}</p>
-                <p><strong>⏰ Waiting Time:</strong> <span style="color: #dc3545; font-weight: bold; font-size: 16px;">${lead.minutesSinceLastMessage} minutes</span></p>
+                <p><strong>⏰ Actual Waiting Time:</strong> <span style="color: #dc3545; font-weight: bold; font-size: 16px;">${Math.max(0, lead.minutesSinceLastMessage - 300)} minutes</span></p>
                 <p><strong>Last Message:</strong> "${lead.messageText.substring(0, 100)}..."</p>
                 <p><strong>Last Activity:</strong> ${new Date(lead.timing.lastActivityDateTime).toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT</p>
             </div>
@@ -29,7 +31,8 @@ async function sendStuckLeadAlert(stuckLeads) {
         const mailOptions = {
             from: `"LSA Lindy Monitor" <${process.env.GMAIL_EMAIL}>`,
             to: process.env.NOTIFICATION_EMAIL,
-            subject: `🚨 Lindy Alert: ${stuckLeads.length} Lead(s) Stuck - No Response >10 Minutes`,
+            // ✅ FIXED: Dynamic threshold in subject
+            subject: `🚨 Lindy Alert: ${stuckLeads.length} Lead(s) Stuck - No Response >${minutesThreshold} Minutes`,
             html: `
                 <!DOCTYPE html>
                 <html>
@@ -55,7 +58,8 @@ async function sendStuckLeadAlert(stuckLeads) {
                         <div class="content">
                             <div class="alert-box">
                                 <h2 style="margin: 0 0 15px 0; color: #856404;">${stuckLeads.length} Lead(s) Need Attention</h2>
-                                <p style="margin: 0; font-size: 16px;">These leads have been waiting <strong>10+ minutes</strong> without a response from Lindy AI.</p>
+                                <!-- ✅ FIXED: Dynamic threshold -->
+                                <p style="margin: 0; font-size: 16px;">These leads have been waiting <strong>${minutesThreshold}+ minutes</strong> without a response from Lindy AI.</p>
                             </div>
                             
                             <h3 style="color: #dc3545;">📋 Stuck Lead Details:</h3>
@@ -76,7 +80,8 @@ async function sendStuckLeadAlert(stuckLeads) {
                                 <h4 style="margin: 0 0 10px 0;">📊 Alert Information:</h4>
                                 <p style="margin: 5px 0;"><strong>Detection Time:</strong> ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT</p>
                                 <p style="margin: 5px 0;"><strong>Affected Leads:</strong> ${stuckLeads.length}</p>
-                                <p style="margin: 5px 0;"><strong>Threshold:</strong> 10 minutes</p>
+                                <!-- ✅ FIXED: Dynamic threshold -->
+                                <p style="margin: 5px 0;"><strong>Threshold:</strong> ${minutesThreshold} minutes</p>
                             </div>
                             
                             <p style="margin-top: 30px; padding: 15px; background: #e8f5e9; border-radius: 5px; border-left: 4px solid #4caf50;">
