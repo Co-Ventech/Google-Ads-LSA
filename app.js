@@ -45,7 +45,7 @@ let tokenCache = {
 function getCurrentEdtTime() {
   const now = new Date();
   const edtFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
+    timeZone: process.env.TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -69,7 +69,7 @@ function getCurrentEdtTime() {
 function getCurrentEdtTimeFormatted() {
   const now = new Date();
   return now.toLocaleString('en-US', {
-    timeZone: 'America/New_York',
+    timeZone: process.env.TIME_ZONE,
     weekday: 'short',
     month: 'short',
     day: 'numeric',
@@ -78,7 +78,7 @@ function getCurrentEdtTimeFormatted() {
     minute: '2-digit',
     second: '2-digit',
     hour12: true
-  }) + ' EDT';
+  }) ;
 }
 
 function getCurrentTimestamp() {
@@ -95,7 +95,7 @@ function getCalendarParameters(daysAhead = 3) {
     endDate: endDate,
     startDateISO: new Date(startDate).toISOString(),
     endDateISO: new Date(endDate).toISOString(),
-    timezone: 'America/New_York'
+    timezone: process.env.TIME_ZONE
   };
 }
 
@@ -278,8 +278,8 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             creditStateLastUpdateDateTime: lead.creditDetails?.creditStateLastUpdateDateTime || null,
             isNewLead: isNewLead,
             hasRecentActivity: hasRecentActivity,
-            currentEdtTime: currentEdtTime,
-            currentEdtTimeFormatted: currentEdtTimeFormatted,
+            currentTime: currentEdtTime,
+            currentTimeFormatted: currentEdtTimeFormatted,
             currentTimestamp: currentTimestamp
           },
           
@@ -319,7 +319,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
               { id: 'CREATION_TIME', field_value: lead.creationDateTime },
               { id: 'LAST_ACTIVITY', field_value: latestConversationTime.toISOString() },
               { id: 'TOTAL_CONVERSATIONS', field_value: leadConversations.length.toString() },
-              { id: 'CURRENT_EDT_TIME', field_value: currentEdtTime },
+              { id: 'CURRENT_TIME', field_value: currentEdtTime },
               { id: 'CALENDAR_START_DATE', field_value: calendarParams.startDate.toString() },
               { id: 'CALENDAR_END_DATE', field_value: calendarParams.endDate.toString() }
             ]
@@ -377,7 +377,7 @@ async function sendToLindy(payload) {
 
   console.log(`📤 Sending lead ${payload.leadId} to Lindy`);
   console.log(`   Message: "${payload.messageText.substring(0, 100)}..."`);
-  console.log(`   Current EDT: ${payload.timing.currentEdtTimeFormatted}`);
+  console.log(`   Current: ${payload.timing.currentEdtTimeFormatted}`);
 
   try {
     const response = await axios.post(LINDY_WEBHOOK_URL, payload, {
@@ -454,308 +454,6 @@ async function pollLeadsAndSendToLindy() {
   };
 }
 
-// // ===== NEW: MONITORING FUNCTION =====
-// async function monitorStuckConversations() {
-//   console.log('\n🔍 ========================================');
-//   console.log('🔍 MONITORING: Checking for stuck workflows...');
-//   console.log('🔍 ========================================');
-  
-//   const { sendStuckLeadAlert } = require('./emailService');
-  
-//   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
-  
-//   if (!leadsResult.success || leadsResult.count === 0) {
-//     console.log('📭 No leads to monitor');
-//     return { success: true, stuckLeads: [], checked: 0 };
-//   }
-  
-//   const stuckLeads = [];
-//   const now = Date.now();
-//   const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
-//   const MAX_MESSAGE_AGE_MS = MONITORING_CONFIG.maxMessageAgeMinutes * 60 * 1000;
-  
-//   for (const lead of leadsResult.leads) {
-//     const conversations = lead.conversationHistory.conversations;
-    
-//     if (conversations.length === 0) continue;
-    
-//     const lastMessage = conversations[conversations.length - 1];
-//     const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
-//     const minutesSinceLastMessage = Math.floor((now - lastMessageTime) / 60000);
-//     const timeDiff = now - lastMessageTime;
-    
-//     // Skip old messages (prevents false alerts on 240-minute-old messages)
-//     if (timeDiff > MAX_MESSAGE_AGE_MS) {
-//       console.log(`⏭️ Skipping lead ${lead.leadId} - Message too old (${minutesSinceLastMessage} min)`);
-//       continue;
-//     }
-    
-//     if (lastMessage.participantType === 'CONSUMER' && timeDiff > STUCK_THRESHOLD_MS) {
-//       console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
-//       console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
-//       console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-//       console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
-//       console.log(`   └─ Message: "${lastMessage.messageText.substring(0, 60)}..."`);
-      
-//       stuckLeads.push({
-//         ...lead,
-//         minutesSinceLastMessage: minutesSinceLastMessage,
-//         lastMessageFrom: lastMessage.participantType,
-//         lastMessageText: lastMessage.messageText,
-//         lastMessageTime: lastMessage.eventDateTime
-//       });
-//     }
-//   }
-  
-//   console.log(`\n📊 Monitoring Results:`);
-//   console.log(`   Total leads checked: ${leadsResult.count}`);
-//   console.log(`   Stuck leads found: ${stuckLeads.length}`);
-  
-//   if (stuckLeads.length > 0) {
-//     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
-    
-//     const emailResult = await sendStuckLeadAlert(stuckLeads);
-    
-//     if (emailResult.statusCode === 200) {
-//       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
-//       console.log(`   Message ID: ${emailResult.messageId}`);
-//     } else {
-//       console.log(`❌ Email alert failed: ${emailResult.message}`);
-//     }
-    
-//     return {
-//       success: true,
-//       stuckLeads: stuckLeads,
-//       checked: leadsResult.count,
-//       emailSent: emailResult.statusCode === 200
-//     };
-    
-//   } else {
-//     console.log(`✅ All conversations are healthy - no alerts needed`);
-    
-//     return {
-//       success: true,
-//       stuckLeads: [],
-//       checked: leadsResult.count,
-//       emailSent: false,
-//       message: 'All conversations healthy ✅'
-//     };
-//   }
-// }
-// // ===== CORRECTED: MONITORING FUNCTION =====
-// async function monitorStuckConversations() {
-//   console.log('\n🔍 ========================================');
-//   console.log('🔍 MONITORING: Checking for stuck workflows...');
-//   console.log('🔍 ========================================');
-  
-//   const { sendStuckLeadAlert } = require('./emailService');
-  
-//   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
-  
-//   if (!leadsResult.success || leadsResult.count === 0) {
-//     console.log('📭 No leads to monitor');
-//     return { success: true, stuckLeads: [], checked: 0 };
-//   }
-  
-//   const stuckLeads = [];
-//   const now = Date.now();
-//   const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
-  
-//   for (const lead of leadsResult.leads) {
-//     const conversations = lead.conversationHistory.conversations;
-    
-//     if (conversations.length === 0) continue;
-    
-//     // ✅ FIND THE LAST CONSUMER MESSAGE (not the last message overall)
-//     const lastConsumerMessage = conversations
-//       .slice()
-//       .reverse()
-//       .find(c => c.participantType === 'CONSUMER');
-    
-//     if (!lastConsumerMessage) {
-//       console.log(`⏭️ Skipping lead ${lead.leadId} - No consumer messages found`);
-//       continue;
-//     }
-    
-//     const lastConsumerMessageTime = new Date(lastConsumerMessage.eventDateTime).getTime();
-//     const minutesSinceLastConsumerMessage = Math.floor((now - lastConsumerMessageTime) / 60000);
-//     const timeDiff = now - lastConsumerMessageTime;
-    
-//     // ✅ CHECK: Has it been > 10 minutes since the LAST CONSUMER message?
-//     if (timeDiff > STUCK_THRESHOLD_MS) {
-      
-//       // ✅ NOW check if there's an AI response AFTER that consumer message
-//       const hasAIResponseAfterConsumer = conversations
-//         .filter(c => new Date(c.eventDateTime).getTime() > lastConsumerMessageTime)
-//         .some(c => c.participantType === 'ADVERTISER');
-      
-//       // ✅ ONLY alert if: Consumer message is old AND NO AI response after it
-//       if (!hasAIResponseAfterConsumer) {
-//         console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
-//         console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
-//         console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-//         console.log(`   ├─ Waiting: ${minutesSinceLastConsumerMessage} minutes`);
-//         console.log(`   ├─ Last Consumer Message: "${lastConsumerMessage.messageText.substring(0, 60)}..."`);
-//         console.log(`   └─ Last Consumer Message Time: ${new Date(lastConsumerMessage.eventDateTime).toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT`);
-        
-//         stuckLeads.push({
-//           ...lead,
-//           minutesSinceLastMessage: minutesSinceLastConsumerMessage,
-//           lastMessageFrom: 'CONSUMER',
-//           lastMessageText: lastConsumerMessage.messageText,
-//           lastMessageTime: lastConsumerMessage.eventDateTime,
-//           hasAIResponse: false
-//         });
-//       } else {
-//         console.log(`✅ Lead ${lead.leadId} - AI already responded (${minutesSinceLastConsumerMessage} min ago, but response received)`);
-//       }
-//     }
-//   }
-  
-//   console.log(`\n📊 Monitoring Results:`);
-//   console.log(`   Total leads checked: ${leadsResult.count}`);
-//   console.log(`   Stuck leads found: ${stuckLeads.length}`);
-  
-//   if (stuckLeads.length > 0) {
-//     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
-    
-//     const emailResult = await sendStuckLeadAlert(stuckLeads);
-    
-//     if (emailResult.statusCode === 200) {
-//       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
-//       console.log(`   Message ID: ${emailResult.messageId}`);
-//     } else {
-//       console.log(`❌ Email alert failed: ${emailResult.message}`);
-//     }
-    
-//     return {
-//       success: true,
-//       stuckLeads: stuckLeads,
-//       checked: leadsResult.count,
-//       emailSent: emailResult.statusCode === 200
-//     };
-    
-//   } else {
-//     console.log(`✅ All conversations are healthy - no alerts needed`);
-    
-//     return {
-//       success: true,
-//       stuckLeads: [],
-//       checked: leadsResult.count,
-//       emailSent: false,
-//       message: 'All conversations healthy ✅'
-//     };
-//   }
-// }
-// async function monitorStuckConversations() {
-//   console.log('\n🔍 ========================================');
-//   console.log('🔍 MONITORING: Checking for stuck workflows...');
-//   console.log('🔍 ========================================');
-  
-//   const { sendStuckLeadAlert } = require('./emailService');
-  
-//   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
-  
-//   if (!leadsResult.success || leadsResult.count === 0) {
-//     console.log('📭 No leads to monitor');
-//     return { success: true, stuckLeads: [], checked: 0 };
-//   }
-  
-//   const stuckLeads = [];
-//   const now = Date.now();
-//   const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
-  
-//   console.log(`\n🔍 Checking ${leadsResult.count} leads for stuck conversations...`);
-//   console.log(`   Stuck threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} minutes\n`);
-  
-//   for (const lead of leadsResult.leads) {
-//     const conversations = lead.conversationHistory.conversations;
-    
-//     if (conversations.length === 0) {
-//       console.log(`⏭️ Lead ${lead.leadId}: No conversations`);
-//       continue;
-//     }
-    
-//     // ✅ Get the VERY LAST message (most recent)
-//     const lastMessage = conversations[conversations.length - 1];
-    
-//     if (!lastMessage) {
-//       console.log(`⏭️ Lead ${lead.leadId}: No messages found`);
-//       continue;
-//     }
-    
-//     // ✅ CHECK 1: Is the last message from CONSUMER?
-//     if (lastMessage.participantType !== 'CONSUMER') {
-//       console.log(`✅ Lead ${lead.leadId}: Last message is from ${lastMessage.participantType} - AI already responded`);
-//       continue;  // AI responded, no alert needed
-//     }
-    
-//     // Last message is from CONSUMER, now check time
-//     const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
-//     const timeDiff = now - lastMessageTime;
-//     const minutesSinceLastMessage = Math.floor(timeDiff / 60000);
-    
-//     console.log(`📋 Lead ${lead.leadId}: Last message from CONSUMER, ${minutesSinceLastMessage} min ago`);
-    
-//     // ✅ CHECK 2: Have 15+ minutes passed?
-//     if (timeDiff < STUCK_THRESHOLD_MS) {
-//       console.log(`   ⏸️ Too recent (${minutesSinceLastMessage} < ${MONITORING_CONFIG.stuckThresholdMinutes} min) - Lindy still processing`);
-//       continue;  // Lindy is still processing, don't alert yet
-//     }
-    
-//     // ✅ Both checks passed: Last message from CONSUMER + 15+ minutes passed
-//     console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
-//     console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
-//     console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-//     console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
-//     console.log(`   ├─ Last Message: "${lastMessage.messageText.substring(0, 60)}..."`);
-//     console.log(`   └─ Last Message Time: ${new Date(lastMessage.eventDateTime).toLocaleString()}`);
-    
-//     stuckLeads.push({
-//       ...lead,
-//       minutesSinceLastMessage: minutesSinceLastMessage,
-//       lastMessageFrom: 'CONSUMER',
-//       lastMessageText: lastMessage.messageText,
-//       lastMessageTime: lastMessage.eventDateTime,
-//       hasAIResponse: false
-//     });
-//   }
-  
-//   console.log(`\n📊 Monitoring Results:`);
-//   console.log(`   Total leads checked: ${leadsResult.count}`);
-//   console.log(`   Stuck leads found: ${stuckLeads.length}`);
-  
-//   if (stuckLeads.length > 0) {
-//     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
-    
-//     const emailResult = await sendStuckLeadAlert(stuckLeads);
-    
-//     if (emailResult.statusCode === 200) {
-//       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
-//       console.log(`   Message ID: ${emailResult.messageId}`);
-//     } else {
-//       console.log(`❌ Email alert failed: ${emailResult.message}`);
-//     }
-    
-//     return {
-//       success: true,
-//       stuckLeads: stuckLeads,
-//       checked: leadsResult.count,
-//       emailSent: emailResult.statusCode === 200
-//     };
-    
-//   } else {
-//     console.log(`✅ All conversations are healthy - no alerts needed`);
-    
-//     return {
-//       success: true,
-//       stuckLeads: [],
-//       checked: leadsResult.count,
-//       emailSent: false,
-//       message: 'All conversations healthy ✅'
-//     };
-//   }
-// }
 async function monitorStuckConversations() {
   console.log('\n🔍 ========================================');
   console.log('🔍 MONITORING: Checking for stuck workflows...');
@@ -996,7 +694,7 @@ app.get('/api/health', async (req, res) => {
       features: [
         'Enhanced conversation history tracking',
         'Detailed timing information',
-        'Current EDT time for slot validation',
+        'Current time for slot validation',
         'Calendar parameters for 4-day range',
         'Full webhook payload with conversation data',
         'Bot loop prevention',
@@ -1051,7 +749,7 @@ if (process.env.NODE_ENV !== 'test') {
   cron.schedule(`*/${MONITORING_CONFIG.intervalMinutes} * * * *`, async () => {
     console.log('\n═══════════════════════════════════════════════════════');
     console.log('🔍 AUTOMATED MONITORING CHECK');
-    console.log(`⏰ Time: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT`);
+    console.log(`⏰ Time: ${new Date().toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })} `);
     console.log('═══════════════════════════════════════════════════════');
     
     try {
@@ -1089,7 +787,7 @@ app.listen(PORT, () => {
   console.log(`🔗 Lindy Webhook: ${LINDY_WEBHOOK_URL ? 'Configured ✅' : 'Not configured ❌'}`);
   console.log(`⚙️ Config: Poll every ${POLL_INTERVAL_MINUTES}min, fetch last ${POLL_BACK_MINUTES}min`);
   console.log(`\n🎯 Features:`);
-  console.log(`   ✅ Current EDT time for AI slot validation`);
+  console.log(`   ✅ Current  time for AI slot validation`);
   console.log(`   ✅ 4-day calendar range (weekend filtering)`);
   console.log(`   ✅ Full conversation history tracking`);
   console.log(`   ✅ Bot loop prevention`);

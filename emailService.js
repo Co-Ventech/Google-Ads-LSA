@@ -24,7 +24,7 @@ async function sendStuckLeadAlert(stuckLeads) {
                 <p><strong>Phone:</strong> ${lead.contactInfo.phone || 'N/A'}</p>
                 <p><strong>⏰ Actual Waiting Time:</strong> <span style="color: #dc3545; font-weight: bold; font-size: 16px;">${Math.max(0, lead.minutesSinceLastMessage - 300)} minutes</span></p>
                 <p><strong>Last Message:</strong> "${lead.messageText.substring(0, 100)}..."</p>
-                <p><strong>Last Activity:</strong> ${new Date(lead.timing.lastActivityDateTime).toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT</p>
+                <p><strong>Last Activity:</strong> ${new Date(lead.timing.lastActivityDateTime).toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })} </p>
             </div>
         `).join('');
 
@@ -78,7 +78,7 @@ async function sendStuckLeadAlert(stuckLeads) {
                             
                             <div class="stats">
                                 <h4 style="margin: 0 0 10px 0;">📊 Alert Information:</h4>
-                                <p style="margin: 5px 0;"><strong>Detection Time:</strong> ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })} EDT</p>
+                                <p style="margin: 5px 0;"><strong>Detection Time:</strong> ${new Date().toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })} </p>
                                 <p style="margin: 5px 0;"><strong>Affected Leads:</strong> ${stuckLeads.length}</p>
                                 <!-- ✅ FIXED: Dynamic threshold -->
                                 <p style="margin: 5px 0;"><strong>Threshold:</strong> ${minutesThreshold} minutes</p>
