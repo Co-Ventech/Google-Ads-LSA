@@ -169,7 +169,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
         local_services_lead_conversation.phone_call_details.call_recording_url
       FROM local_services_lead_conversation 
       ORDER BY local_services_lead_conversation.event_date_time DESC
-      LIMIT 2000
+      LIMIT 500
     `;
     
     const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
