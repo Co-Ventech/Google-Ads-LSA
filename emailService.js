@@ -28,6 +28,8 @@ async function sendStuckLeadAlert(stuckLeads) {
             
             return `
             <div style="background: #fff3cd; padding: 15px; margin: 10px 0; border-left: 4px solid #ffc107; border-radius: 5px;">
+                        <p><strong>🏢 Customer:</strong> ${process.env.CUSTOMER_NAME || 'N/A'}</p>
+        <p><strong>🆔 Customer ID:</strong> ${process.env.GOOGLE_ADS_CUSTOMER_ID}</p>
                 <p><strong>🚨 Lead ID:</strong> ${lead.leadId}</p>
                 <p><strong>Customer:</strong> ${lead.contactInfo.name || 'Unknown'}</p>
                 <p><strong>Phone:</strong> ${lead.contactInfo.phone || 'N/A'}</p>
@@ -92,6 +94,8 @@ async function sendStuckLeadAlert(stuckLeads) {
                             
                             <div class="stats">
                                 <h4 style="margin: 0 0 10px 0;">📊 Alert Information:</h4>
+                                <p style="margin: 5px 0;"><strong>Customer Name:</strong> ${process.env.CUSTOMER_NAME || 'N/A'}</p>
+                                <p style="margin: 5px 0;"><strong>Customer ID:</strong> ${process.env.GOOGLE_ADS_CUSTOMER_ID}</p>
                                 <p style="margin: 5px 0;"><strong>Detection Time:</strong> ${new Date().toLocaleString('en-US', { timeZone: clientTimezone })}</p>
                                 <p style="margin: 5px 0;"><strong>Affected Leads:</strong> ${stuckLeads.length}</p>
                                 <p style="margin: 5px 0;"><strong>Threshold:</strong> ${minutesThreshold} minutes</p>
