@@ -609,17 +609,17 @@ async function monitorStuckConversations() {
     // ║  To ENABLE:  Uncomment the lines between START and END                 ║
     // ╚════════════════════════════════════════════════════════════════════════╝
     
-    // ===== START: AUTO-RETRY BLOCK =====
-    console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
-    for (const stuckLead of stuckLeads) {
-      const lindyResult = await sendToLindy(stuckLead);
-      if (lindyResult.success) {
-        console.log(`   ✅ Re-sent lead ${stuckLead.leadId} to Lindy`);
-      } else {
-        console.log(`   ❌ Failed to re-send lead ${stuckLead.leadId}: ${lindyResult.error}`);
-      }
-    }
-    // ===== END: AUTO-RETRY BLOCK =====
+    // // ===== START: AUTO-RETRY BLOCK =====
+    // console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
+    // for (const stuckLead of stuckLeads) {
+    //   const lindyResult = await sendToLindy(stuckLead);
+    //   if (lindyResult.success) {
+    //     console.log(`   ✅ Re-sent lead ${stuckLead.leadId} to Lindy`);
+    //   } else {
+    //     console.log(`   ❌ Failed to re-send lead ${stuckLead.leadId}: ${lindyResult.error}`);
+    //   }
+    // }
+    // // ===== END: AUTO-RETRY BLOCK =====
     
     const emailResult = await sendStuckLeadAlert(stuckLeads);
     
