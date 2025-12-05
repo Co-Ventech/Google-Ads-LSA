@@ -32,10 +32,6 @@ const MONITORING_CONFIG = {
   stuckThresholdMinutes: parseInt(process.env.MONITOR_STUCK_THRESHOLD_MINUTES) || 15,
   maxMessageAgeMinutes: parseInt(process.env.MONITOR_MAX_MESSAGE_AGE_MINUTES) || 60,
   lookbackMinutes: parseInt(process.env.MONITOR_LOOKBACK_MINUTES) || 250,
-  // NEW: Calculate timezone offset from POLL_BACK_MINUTES
-  // POLL_BACK_MINUTES = timezone_offset + buffer (2 min)
-  // Example: 302 = 300 (5 hours EST) + 2 buffer
-  // Example: 482 = 480 (8 hours PST) + 2 buffer
   timezoneOffsetMinutes: parseInt(process.env.POLL_BACK_MINUTES) - parseInt(process.env.POLL_INTERVAL_MINUTES) || 300
 };
 
@@ -47,21 +43,10 @@ let tokenCache = {
 
 // ===== TIME FUNCTIONS =====
 
-/**
- * Get the server's timezone offset from UTC in minutes
- * This helps with accurate time calculations
- */
 function getServerTimezoneOffset() {
-  return new Date().getTimezoneOffset(); // Returns minutes (e.g., 0 for UTC, 300 for EST)
+  return new Date().getTimezoneOffset();
 }
 
-/**
- * Calculate actual minutes since a Google LSA timestamp
- * Google LSA API returns timestamps in UTC, so we need to compare correctly
- * 
- * @param {string} googleTimestamp - ISO timestamp from Google LSA API (in UTC)
- * @returns {number} - Actual minutes since that timestamp
- */
 function getMinutesSinceGoogleTimestamp(googleTimestamp) {
   const messageTime = new Date(googleTimestamp).getTime();
   const now = Date.now();
@@ -70,11 +55,6 @@ function getMinutesSinceGoogleTimestamp(googleTimestamp) {
   return diffMinutes;
 }
 
-/**
- * Parse Google LSA timestamp and return both local and UTC representations
- * @param {string} googleTimestamp - ISO timestamp from Google LSA
- * @returns {Object} - Object with various time representations
- */
 function parseGoogleTimestamp(googleTimestamp) {
   const utcDate = new Date(googleTimestamp);
   const localDate = new Date(utcDate.toLocaleString('en-US', { timeZone: process.env.TIME_ZONE || 'America/New_York' }));
@@ -85,6 +65,82 @@ function parseGoogleTimestamp(googleTimestamp) {
     timestamp: utcDate.getTime(),
     minutesAgo: getMinutesSinceGoogleTimestamp(googleTimestamp)
   };
+}
+
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  NEW FUNCTION: Parse Google Ads timestamp correctly                           ║
+// ║  Google returns "YYYY-MM-DD HH:MM:SS" in ACCOUNT's timezone (no indicator)    ║
+// ║  We need to interpret it as account timezone, then convert to UTC for math    ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
+function parseGoogleAdsTimestamp(googleTimestamp, accountTimezone) {
+  // Google returns: "2025-12-03 01:59:08" (in account timezone, NO timezone indicator)
+  // JavaScript's new Date() would wrongly interpret this as UTC/local server time
+  
+  if (!googleTimestamp) return null;
+  
+  const tz = accountTimezone || process.env.TIME_ZONE || 'America/New_York';
+  
+  // Handle ISO format (already has timezone info like "Z" or "+00:00")
+  if (googleTimestamp.includes('T') && (googleTimestamp.includes('Z') || googleTimestamp.includes('+') || googleTimestamp.match(/-\d{2}:\d{2}$/))) {
+    return new Date(googleTimestamp).getTime();
+  }
+  
+  // For Google Ads format "YYYY-MM-DD HH:MM:SS" (no timezone indicator)
+  // This timestamp is in the ACCOUNT's timezone
+  
+  // Get the timezone offset for the account timezone
+  const now = new Date();
+  
+  // Create formatter for the account timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  // Get current time in both UTC and account timezone to calculate offset
+  const utcNow = new Date();
+  const utcString = utcNow.toISOString().slice(0, 19).replace('T', ' ');
+  
+  const tzParts = formatter.formatToParts(utcNow);
+  const tzObj = {};
+  tzParts.forEach(p => { if (p.type !== 'literal') tzObj[p.type] = p.value; });
+  const tzString = `${tzObj.year}-${tzObj.month}-${tzObj.day} ${tzObj.hour}:${tzObj.minute}:${tzObj.second}`;
+  
+  // Calculate offset: how many ms ahead/behind is the timezone from UTC
+  const utcMs = new Date(utcString.replace(' ', 'T') + 'Z').getTime();
+  const tzMs = new Date(tzString.replace(' ', 'T') + 'Z').getTime();
+  const offsetMs = tzMs - utcMs;
+  
+  // Parse the Google timestamp as if it were UTC
+  const googleMs = new Date(googleTimestamp.replace(' ', 'T') + 'Z').getTime();
+  
+  // Convert to actual UTC by subtracting the offset
+  // If timezone is EST (UTC-5), offset is negative (-18000000ms)
+  // Google says "01:59 EST" = 01:59 + 5 hours = 06:59 UTC
+  const actualUtcMs = googleMs - offsetMs;
+  
+  return actualUtcMs;
+}
+
+/**
+ * Calculate ACTUAL minutes since a Google Ads timestamp
+ * This correctly handles the timezone issue
+ */
+function getActualMinutesSinceGoogleTimestamp(googleTimestamp, accountTimezone) {
+  const actualUtcMs = parseGoogleAdsTimestamp(googleTimestamp, accountTimezone);
+  if (!actualUtcMs) return 0;
+  
+  const now = Date.now();
+  const diffMs = now - actualUtcMs;
+  const diffMinutes = Math.floor(diffMs / 60000);
+  
+  return Math.max(0, diffMinutes);
 }
 
 function getCurrentEdtTime() {
@@ -181,6 +237,7 @@ async function getGoogleAccessToken() {
 }
 
 // ===== FETCH LEADS WITH FULL CONVERSATION HISTORY =====
+// NOTE: This function is NOT changed - it works correctly with POLL_BACK_MINUTES
 async function fetchLSALeadsWithConversationHistory(minutes) {
   const now = new Date();
   const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
@@ -401,6 +458,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
 }
 
 // ===== SEND TO LINDY =====
+// NOTE: This function is NOT changed
 async function sendToLindy(payload) {
   if (!LINDY_WEBHOOK_URL) {
     console.warn('⚠️ Lindy webhook URL not configured');
@@ -451,6 +509,7 @@ async function sendToLindy(payload) {
 }
 
 // ===== MAIN POLLING FUNCTION =====
+// NOTE: This function is NOT changed
 async function pollLeadsAndSendToLindy() {
   console.log(`\n🔄 Starting polling for last ${POLL_BACK_MINUTES} minutes...`);
   
@@ -499,7 +558,12 @@ async function pollLeadsAndSendToLindy() {
   };
 }
 
-// ===== MONITORING FUNCTION - FIXED TIMEZONE HANDLING =====
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  FIXED MONITORING FUNCTION - Correct timezone handling                        ║
+// ║  CHANGES:                                                                      ║
+// ║  1. Uses getActualMinutesSinceGoogleTimestamp() for correct time calculation  ║
+// ║  2. Properly interprets Google's account-timezone timestamps                  ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
 async function monitorStuckConversations() {
   console.log('\n🔍 ========================================');
   console.log('🔍 MONITORING: Checking for stuck workflows...');
@@ -516,12 +580,13 @@ async function monitorStuckConversations() {
   
   const stuckLeads = [];
   const now = Date.now();
-  const STUCK_THRESHOLD_MS = MONITORING_CONFIG.stuckThresholdMinutes * 60 * 1000;
+  const accountTimezone = process.env.TIME_ZONE || 'America/New_York';
   
   console.log(`\n🔍 Checking ${leadsResult.count} leads for stuck conversations...`);
   console.log(`   Stuck threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} minutes`);
-  console.log(`   Server time: ${new Date().toISOString()}`);
-  console.log(`   Local time (${process.env.TIME_ZONE}): ${new Date().toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })}\n`);
+  console.log(`   Account timezone: ${accountTimezone}`);
+  console.log(`   Server time (UTC): ${new Date().toISOString()}`);
+  console.log(`   Server time (${accountTimezone}): ${new Date().toLocaleString('en-US', { timeZone: accountTimezone })}\n`);
   
   for (const lead of leadsResult.leads) {
     const conversations = lead.conversationHistory.conversations;
@@ -531,7 +596,6 @@ async function monitorStuckConversations() {
       continue;
     }
     
-    // Get the VERY LAST message (most recent)
     const lastMessage = conversations[conversations.length - 1];
     
     if (!lastMessage) {
@@ -539,59 +603,58 @@ async function monitorStuckConversations() {
       continue;
     }
     
-    // FIXED: Calculate time difference correctly
-    // Google LSA API returns UTC timestamps, so we compare directly with Date.now() which is also UTC
-    const lastMessageTime = new Date(lastMessage.eventDateTime).getTime();
-    const timeDiff = now - lastMessageTime;
-    const minutesSinceLastMessage = Math.floor(timeDiff / 60000);
+    // ╔═══════════════════════════════════════════════════════════════════════════╗
+    // ║  FIX: Use the new function that correctly handles timezone               ║
+    // ╚═══════════════════════════════════════════════════════════════════════════╝
+    const minutesSinceLastMessage = getActualMinutesSinceGoogleTimestamp(
+      lastMessage.eventDateTime, 
+      accountTimezone
+    );
     
-    // Debug log for timezone verification
     console.log(`\n📋 Lead ${lead.leadId}: ${conversations.length} messages total`);
     console.log(`   Last message from: ${lastMessage.participantType}`);
-    console.log(`   Last message time (UTC): ${lastMessage.eventDateTime}`);
-    console.log(`   Last message time (Local): ${new Date(lastMessage.eventDateTime).toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })}`);
-    console.log(`   Current time (UTC): ${new Date().toISOString()}`);
-    console.log(`   Actual minutes since last message: ${minutesSinceLastMessage} min`);
+    console.log(`   Google timestamp (account tz): ${lastMessage.eventDateTime}`);
+    console.log(`   ⏱️ ACTUAL minutes since message: ${minutesSinceLastMessage} min`);
     console.log(`   Threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} min`);
     
     // CHECK 1: Is the last message from CONSUMER?
     if (lastMessage.participantType !== 'CONSUMER') {
       console.log(`   ✅ SKIP: Last message is from ${lastMessage.participantType} - AI responded`);
-      continue;  // AI responded, no alert needed
+      continue;
     }
     
     console.log(`   ✓ Check 1 passed: Last message IS from CONSUMER`);
     
-    // CHECK 2: Have threshold minutes passed?
-    if (timeDiff < STUCK_THRESHOLD_MS) {
+    // CHECK 2: Have threshold minutes passed? (NOW USING CORRECT CALCULATION)
+    if (minutesSinceLastMessage < MONITORING_CONFIG.stuckThresholdMinutes) {
       console.log(`   ✅ SKIP: Only ${minutesSinceLastMessage} min passed (need ${MONITORING_CONFIG.stuckThresholdMinutes} min)`);
-      continue;  // Not old enough yet
+      continue;
     }
     
     console.log(`   ✓ Check 2 passed: ${minutesSinceLastMessage} >= ${MONITORING_CONFIG.stuckThresholdMinutes}`);
     
-    // CHECK 3: Optional - Skip very old messages (older than maxMessageAgeMinutes)
-    // This prevents alerting on old conversations that were intentionally closed
+    // CHECK 3: Skip very old messages
     if (minutesSinceLastMessage > MONITORING_CONFIG.maxMessageAgeMinutes) {
       console.log(`   ⏭️ SKIP: Message too old (${minutesSinceLastMessage} min > ${MONITORING_CONFIG.maxMessageAgeMinutes} max)`);
       continue;
     }
     
-    // Both checks passed: Last message from CONSUMER + threshold passed + not too old
+    // All checks passed: This is a genuinely stuck lead
     console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
     console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
     console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-    console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes`);
+    console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes (ACTUAL)`);
     console.log(`   ├─ Last Message: "${lastMessage.messageText.substring(0, 60)}..."`);
-    console.log(`   └─ Last Message Time (Local): ${new Date(lastMessage.eventDateTime).toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })}`);
+    console.log(`   └─ Last Message Time: ${lastMessage.eventDateTime} (${accountTimezone})`);
     
     stuckLeads.push({
       ...lead,
-      minutesSinceLastMessage: minutesSinceLastMessage,  // Now this is the ACTUAL minutes
+      minutesSinceLastMessage: minutesSinceLastMessage,
       lastMessageFrom: 'CONSUMER',
       lastMessageText: lastMessage.messageText,
       lastMessageTime: lastMessage.eventDateTime,
-      lastMessageTimeLocal: new Date(lastMessage.eventDateTime).toLocaleString('en-US', { timeZone: process.env.TIME_ZONE }),
+      lastMessageTimeLocal: new Date(parseGoogleAdsTimestamp(lastMessage.eventDateTime, accountTimezone))
+        .toLocaleString('en-US', { timeZone: accountTimezone }),
       hasAIResponse: false
     });
   }
@@ -602,12 +665,6 @@ async function monitorStuckConversations() {
   
   if (stuckLeads.length > 0) {
     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
-    
-    // ╔════════════════════════════════════════════════════════════════════════╗
-    // ║  AUTO-RETRY TO LINDY - TOGGLE ON/OFF                                   ║
-    // ║  To DISABLE: Comment the lines between START and END                   ║
-    // ║  To ENABLE:  Uncomment the lines between START and END                 ║
-    // ╚════════════════════════════════════════════════════════════════════════╝
     
     // // ===== START: AUTO-RETRY BLOCK =====
     // console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
@@ -682,7 +739,6 @@ app.get('/api/poll-now', async (req, res) => {
   }
 });
 
-// Monitoring endpoint
 app.get('/api/monitor-stuck', async (req, res) => {
   try {
     console.log('\n🔍 Manual monitoring check triggered via API...\n');
@@ -701,7 +757,7 @@ app.get('/api/monitor-stuck', async (req, res) => {
         leadId: lead.leadId,
         customerName: lead.contactInfo.name || 'Unknown',
         phone: lead.contactInfo.phone || 'N/A',
-        minutesWaiting: lead.minutesSinceLastMessage,  // Now shows ACTUAL minutes
+        minutesWaiting: lead.minutesSinceLastMessage,
         lastMessage: lead.lastMessageText.substring(0, 100) + '...',
         lastActivity: lead.timing.lastActivityDateTime,
         lastActivityLocal: lead.lastMessageTimeLocal
@@ -780,9 +836,10 @@ app.get('/api/health', async (req, res) => {
         'Calendar parameters for 4-day range',
         'Full webhook payload with conversation data',
         'Bot loop prevention',
-        `🆕 Stuck lead monitoring (${MONITORING_CONFIG.stuckThresholdMinutes}-minute threshold)`,
-        '🆕 Email alerts for missed responses',
-        '🆕 Auto-retry stuck leads to Lindy'
+        `Stuck lead monitoring (${MONITORING_CONFIG.stuckThresholdMinutes}-minute threshold)`,
+        'Email alerts for missed responses',
+        'Auto-retry stuck leads to Lindy',
+        '✅ FIXED: Timezone parsing for Google Ads timestamps'
       ],
       config: {
         pollIntervalMinutes: POLL_INTERVAL_MINUTES,
@@ -821,7 +878,6 @@ app.get('/api/health', async (req, res) => {
 // ===== CRON JOBS =====
 
 if (process.env.NODE_ENV !== 'test') {
-  // Existing polling cron (every 2 minutes, looks back POLL_BACK_MINUTES)
   cron.schedule(`*/${POLL_INTERVAL_MINUTES} * * * *`, async () => {
     console.log(`🕐 Automated ${POLL_INTERVAL_MINUTES}-minute polling triggered...`);
     try {
@@ -832,7 +888,6 @@ if (process.env.NODE_ENV !== 'test') {
   });
   console.log(`⏰ Polling cron scheduled: Every ${POLL_INTERVAL_MINUTES} minutes (looking back ${POLL_BACK_MINUTES} min)`);
   
-  // Monitoring cron (every MONITOR_INTERVAL_MINUTES)
   cron.schedule(`*/${MONITORING_CONFIG.intervalMinutes} * * * *`, async () => {
     console.log('\n═══════════════════════════════════════════════════════');
     console.log('🔍 AUTOMATED MONITORING CHECK');
@@ -863,7 +918,7 @@ if (process.env.NODE_ENV !== 'test') {
     }
   });
   
-  console.log(`⏰ Monitoring cron scheduled: Every ${MONITORING_CONFIG.intervalMinutes} minutes (checking last ${MONITORING_CONFIG.lookbackMinutes} min for stuck leads)\n`);
+  console.log(`⏰ Monitoring cron scheduled: Every ${MONITORING_CONFIG.intervalMinutes} minutes\n`);
 }
 
 // ===== START SERVER =====
@@ -882,7 +937,7 @@ app.listen(PORT, () => {
   console.log(`   ✅ Bot loop prevention`);
   console.log(`   ✅ Stuck lead monitoring (${MONITORING_CONFIG.stuckThresholdMinutes}-minute threshold)`);
   console.log(`   ✅ Email alerts for missed responses`);
-  console.log(`   ✅ Auto-retry stuck leads to Lindy`);
+  console.log(`   ✅ FIXED: Timezone parsing for Google Ads timestamps`);
   console.log(`\n📋 API Endpoints:`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
