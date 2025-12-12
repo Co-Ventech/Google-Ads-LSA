@@ -186,7 +186,7 @@ function getCurrentTimestamp() {
   return Date.now();
 }
 
-function getCalendarParameters(daysAhead = 4) {
+function getCalendarParameters(daysAhead = 10) {
   const currentTimestamp = getCurrentTimestamp();
   const startDate = currentTimestamp;
   const endDate = currentTimestamp + (daysAhead * 24 * 60 * 60 * 1000);
@@ -726,7 +726,7 @@ app.get('/api/poll-now', async (req, res) => {
         pollBackMinutes: POLL_BACK_MINUTES,
         addPhoneLeads: ADD_PHONE_LEADS === 'true',
         webhookConfigured: !!LINDY_WEBHOOK_URL,
-        calendarDaysAhead: 4
+        calendarDaysAhead: 10
       }
     });
     
@@ -848,7 +848,7 @@ app.get('/api/health', async (req, res) => {
         hasGoogleCredentials: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REFRESH_TOKEN),
         hasLindyWebhook: !!LINDY_WEBHOOK_URL,
         customerId: GOOGLE_ADS_CUSTOMER_ID,
-        calendarDaysAhead: 4,
+        calendarDaysAhead: 10,
         monitoring: {
           enabled: true,
           intervalMinutes: MONITORING_CONFIG.intervalMinutes,
