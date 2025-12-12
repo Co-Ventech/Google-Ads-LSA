@@ -336,7 +336,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
     const currentTimestamp = getCurrentTimestamp();
     const currentEdtTime = getCurrentEdtTime();
     const currentEdtTimeFormatted = getCurrentEdtTimeFormatted();
-    const calendarParams = getCalendarParameters(3);
+    const calendarParams = getCalendarParameters(10);
     
     for (const result of allLeads) {
       const lead = result.localServicesLead;
@@ -788,7 +788,7 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
   
   const currentTimestamp = Date.now();
   const startDate = currentTimestamp;
-  const endDate = currentTimestamp + (3 * 24 * 60 * 60 * 1000);
+  const endDate = currentTimestamp + (10 * 24 * 60 * 60 * 1000);
   
   const calendarId = req.query.calendarId;
   const authToken = process.env.GHL_ACCESS_TOKEN;
