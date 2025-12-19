@@ -271,7 +271,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
         local_services_lead_conversation.phone_call_details.call_recording_url
       FROM local_services_lead_conversation 
       ORDER BY local_services_lead_conversation.event_date_time DESC
-      LIMIT 400
+      LIMIT 250
     `;
     
     const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
@@ -324,7 +324,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
         local_services_lead.resource_name
       FROM local_services_lead 
       ORDER BY local_services_lead.creation_date_time DESC
-      LIMIT 400
+      LIMIT 250
     `;
     
     const leadResponse = await axios.post(url, { query: leadQuery }, { headers });
