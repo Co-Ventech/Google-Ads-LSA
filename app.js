@@ -4,7 +4,7 @@ const axios = require('axios');
 const cron = require('node-cron');
 const qs = require('querystring');
 const cors = require('cors');
-
+const { monitorStuckConversations } = require('./Monitoringservice');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -564,148 +564,148 @@ async function pollLeadsAndSendToLindy() {
 // ║  1. Uses getActualMinutesSinceGoogleTimestamp() for correct time calculation  ║
 // ║  2. Properly interprets Google's account-timezone timestamps                  ║
 // ╚═══════════════════════════════════════════════════════════════════════════════╝
-async function monitorStuckConversations() {
-  console.log('\n🔍 ========================================');
-  console.log('🔍 MONITORING: Checking for stuck workflows...');
-  console.log('🔍 ========================================');
+// async function monitorStuckConversations() {
+//   console.log('\n🔍 ========================================');
+//   console.log('🔍 MONITORING: Checking for stuck workflows...');
+//   console.log('🔍 ========================================');
   
-  const { sendStuckLeadAlert } = require('./emailService');
+//   const { sendStuckLeadAlert } = require('./emailService');
   
-  const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
+//   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
   
-  if (!leadsResult.success || leadsResult.count === 0) {
-    console.log('📭 No leads to monitor');
-    return { success: true, stuckLeads: [], checked: 0 };
-  }
+//   if (!leadsResult.success || leadsResult.count === 0) {
+//     console.log('📭 No leads to monitor');
+//     return { success: true, stuckLeads: [], checked: 0 };
+//   }
   
-  const stuckLeads = [];
-  const now = Date.now();
-  const accountTimezone = process.env.TIME_ZONE || 'America/New_York';
+//   const stuckLeads = [];
+//   const now = Date.now();
+//   const accountTimezone = process.env.TIME_ZONE || 'America/New_York';
   
-  console.log(`\n🔍 Checking ${leadsResult.count} leads for stuck conversations...`);
-  console.log(`   Stuck threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} minutes`);
-  console.log(`   Account timezone: ${accountTimezone}`);
-  console.log(`   Server time (UTC): ${new Date().toISOString()}`);
-  console.log(`   Server time (${accountTimezone}): ${new Date().toLocaleString('en-US', { timeZone: accountTimezone })}\n`);
+//   console.log(`\n🔍 Checking ${leadsResult.count} leads for stuck conversations...`);
+//   console.log(`   Stuck threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} minutes`);
+//   console.log(`   Account timezone: ${accountTimezone}`);
+//   console.log(`   Server time (UTC): ${new Date().toISOString()}`);
+//   console.log(`   Server time (${accountTimezone}): ${new Date().toLocaleString('en-US', { timeZone: accountTimezone })}\n`);
   
-  for (const lead of leadsResult.leads) {
-    const conversations = lead.conversationHistory.conversations;
+//   for (const lead of leadsResult.leads) {
+//     const conversations = lead.conversationHistory.conversations;
     
-    if (conversations.length === 0) {
-      console.log(`⏭️ Lead ${lead.leadId}: No conversations`);
-      continue;
-    }
+//     if (conversations.length === 0) {
+//       console.log(`⏭️ Lead ${lead.leadId}: No conversations`);
+//       continue;
+//     }
     
-    const lastMessage = conversations[conversations.length - 1];
+//     const lastMessage = conversations[conversations.length - 1];
     
-    if (!lastMessage) {
-      console.log(`⏭️ Lead ${lead.leadId}: No messages found`);
-      continue;
-    }
+//     if (!lastMessage) {
+//       console.log(`⏭️ Lead ${lead.leadId}: No messages found`);
+//       continue;
+//     }
     
-    // ╔═══════════════════════════════════════════════════════════════════════════╗
-    // ║  FIX: Use the new function that correctly handles timezone               ║
-    // ╚═══════════════════════════════════════════════════════════════════════════╝
-    const minutesSinceLastMessage = getActualMinutesSinceGoogleTimestamp(
-      lastMessage.eventDateTime, 
-      accountTimezone
-    );
+//     // ╔═══════════════════════════════════════════════════════════════════════════╗
+//     // ║  FIX: Use the new function that correctly handles timezone               ║
+//     // ╚═══════════════════════════════════════════════════════════════════════════╝
+//     const minutesSinceLastMessage = getActualMinutesSinceGoogleTimestamp(
+//       lastMessage.eventDateTime, 
+//       accountTimezone
+//     );
     
-    console.log(`\n📋 Lead ${lead.leadId}: ${conversations.length} messages total`);
-    console.log(`   Last message from: ${lastMessage.participantType}`);
-    console.log(`   Google timestamp (account tz): ${lastMessage.eventDateTime}`);
-    console.log(`   ⏱️ ACTUAL minutes since message: ${minutesSinceLastMessage} min`);
-    console.log(`   Threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} min`);
+//     console.log(`\n📋 Lead ${lead.leadId}: ${conversations.length} messages total`);
+//     console.log(`   Last message from: ${lastMessage.participantType}`);
+//     console.log(`   Google timestamp (account tz): ${lastMessage.eventDateTime}`);
+//     console.log(`   ⏱️ ACTUAL minutes since message: ${minutesSinceLastMessage} min`);
+//     console.log(`   Threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} min`);
     
-    // CHECK 1: Is the last message from CONSUMER?
-    if (lastMessage.participantType !== 'CONSUMER') {
-      console.log(`   ✅ SKIP: Last message is from ${lastMessage.participantType} - AI responded`);
-      continue;
-    }
+//     // CHECK 1: Is the last message from CONSUMER?
+//     if (lastMessage.participantType !== 'CONSUMER') {
+//       console.log(`   ✅ SKIP: Last message is from ${lastMessage.participantType} - AI responded`);
+//       continue;
+//     }
     
-    console.log(`   ✓ Check 1 passed: Last message IS from CONSUMER`);
+//     console.log(`   ✓ Check 1 passed: Last message IS from CONSUMER`);
     
-    // CHECK 2: Have threshold minutes passed? (NOW USING CORRECT CALCULATION)
-    if (minutesSinceLastMessage < MONITORING_CONFIG.stuckThresholdMinutes) {
-      console.log(`   ✅ SKIP: Only ${minutesSinceLastMessage} min passed (need ${MONITORING_CONFIG.stuckThresholdMinutes} min)`);
-      continue;
-    }
+//     // CHECK 2: Have threshold minutes passed? (NOW USING CORRECT CALCULATION)
+//     if (minutesSinceLastMessage < MONITORING_CONFIG.stuckThresholdMinutes) {
+//       console.log(`   ✅ SKIP: Only ${minutesSinceLastMessage} min passed (need ${MONITORING_CONFIG.stuckThresholdMinutes} min)`);
+//       continue;
+//     }
     
-    console.log(`   ✓ Check 2 passed: ${minutesSinceLastMessage} >= ${MONITORING_CONFIG.stuckThresholdMinutes}`);
+//     console.log(`   ✓ Check 2 passed: ${minutesSinceLastMessage} >= ${MONITORING_CONFIG.stuckThresholdMinutes}`);
     
-    // CHECK 3: Skip very old messages
-    if (minutesSinceLastMessage > MONITORING_CONFIG.maxMessageAgeMinutes) {
-      console.log(`   ⏭️ SKIP: Message too old (${minutesSinceLastMessage} min > ${MONITORING_CONFIG.maxMessageAgeMinutes} max)`);
-      continue;
-    }
+//     // CHECK 3: Skip very old messages
+//     if (minutesSinceLastMessage > MONITORING_CONFIG.maxMessageAgeMinutes) {
+//       console.log(`   ⏭️ SKIP: Message too old (${minutesSinceLastMessage} min > ${MONITORING_CONFIG.maxMessageAgeMinutes} max)`);
+//       continue;
+//     }
     
-    // All checks passed: This is a genuinely stuck lead
-    console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
-    console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
-    console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
-    console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes (ACTUAL)`);
-    console.log(`   ├─ Last Message: "${lastMessage.messageText.substring(0, 60)}..."`);
-    console.log(`   └─ Last Message Time: ${lastMessage.eventDateTime} (${accountTimezone})`);
+//     // All checks passed: This is a genuinely stuck lead
+//     console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
+//     console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
+//     console.log(`   ├─ Phone: ${lead.contactInfo.phone || 'N/A'}`);
+//     console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes (ACTUAL)`);
+//     console.log(`   ├─ Last Message: "${lastMessage.messageText.substring(0, 60)}..."`);
+//     console.log(`   └─ Last Message Time: ${lastMessage.eventDateTime} (${accountTimezone})`);
     
-    stuckLeads.push({
-      ...lead,
-      minutesSinceLastMessage: minutesSinceLastMessage,
-      lastMessageFrom: 'CONSUMER',
-      lastMessageText: lastMessage.messageText,
-      lastMessageTime: lastMessage.eventDateTime,
-      lastMessageTimeLocal: new Date(parseGoogleAdsTimestamp(lastMessage.eventDateTime, accountTimezone))
-        .toLocaleString('en-US', { timeZone: accountTimezone }),
-      hasAIResponse: false
-    });
-  }
+//     stuckLeads.push({
+//       ...lead,
+//       minutesSinceLastMessage: minutesSinceLastMessage,
+//       lastMessageFrom: 'CONSUMER',
+//       lastMessageText: lastMessage.messageText,
+//       lastMessageTime: lastMessage.eventDateTime,
+//       lastMessageTimeLocal: new Date(parseGoogleAdsTimestamp(lastMessage.eventDateTime, accountTimezone))
+//         .toLocaleString('en-US', { timeZone: accountTimezone }),
+//       hasAIResponse: false
+//     });
+//   }
   
-  console.log(`\n📊 Monitoring Results:`);
-  console.log(`   Total leads checked: ${leadsResult.count}`);
-  console.log(`   Stuck leads found: ${stuckLeads.length}`);
+//   console.log(`\n📊 Monitoring Results:`);
+//   console.log(`   Total leads checked: ${leadsResult.count}`);
+//   console.log(`   Stuck leads found: ${stuckLeads.length}`);
   
-  if (stuckLeads.length > 0) {
-    console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
+//   if (stuckLeads.length > 0) {
+//     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
     
-    // // ===== START: AUTO-RETRY BLOCK =====
-    // console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
-    // for (const stuckLead of stuckLeads) {
-    //   const lindyResult = await sendToLindy(stuckLead);
-    //   if (lindyResult.success) {
-    //     console.log(`   ✅ Re-sent lead ${stuckLead.leadId} to Lindy`);
-    //   } else {
-    //     console.log(`   ❌ Failed to re-send lead ${stuckLead.leadId}: ${lindyResult.error}`);
-    //   }
-    // }
-    // // ===== END: AUTO-RETRY BLOCK =====
+//     // // ===== START: AUTO-RETRY BLOCK =====
+//     // console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
+//     // for (const stuckLead of stuckLeads) {
+//     //   const lindyResult = await sendToLindy(stuckLead);
+//     //   if (lindyResult.success) {
+//     //     console.log(`   ✅ Re-sent lead ${stuckLead.leadId} to Lindy`);
+//     //   } else {
+//     //     console.log(`   ❌ Failed to re-send lead ${stuckLead.leadId}: ${lindyResult.error}`);
+//     //   }
+//     // }
+//     // // ===== END: AUTO-RETRY BLOCK =====
     
-    const emailResult = await sendStuckLeadAlert(stuckLeads);
+//     const emailResult = await sendStuckLeadAlert(stuckLeads);
     
-    if (emailResult.statusCode === 200) {
-      console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
-      console.log(`   Message ID: ${emailResult.messageId}`);
-    } else {
-      console.log(`❌ Email alert failed: ${emailResult.message}`);
-    }
+//     if (emailResult.statusCode === 200) {
+//       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
+//       console.log(`   Message ID: ${emailResult.messageId}`);
+//     } else {
+//       console.log(`❌ Email alert failed: ${emailResult.message}`);
+//     }
     
-    return {
-      success: true,
-      stuckLeads: stuckLeads,
-      checked: leadsResult.count,
-      emailSent: emailResult.statusCode === 200
-    };
+//     return {
+//       success: true,
+//       stuckLeads: stuckLeads,
+//       checked: leadsResult.count,
+//       emailSent: emailResult.statusCode === 200
+//     };
     
-  } else {
-    console.log(`✅ All conversations are healthy - no alerts needed`);
+//   } else {
+//     console.log(`✅ All conversations are healthy - no alerts needed`);
     
-    return {
-      success: true,
-      stuckLeads: [],
-      checked: leadsResult.count,
-      emailSent: false,
-      message: 'All conversations healthy ✅'
-    };
-  }
-}
+//     return {
+//       success: true,
+//       stuckLeads: [],
+//       checked: leadsResult.count,
+//       emailSent: false,
+//       message: 'All conversations healthy ✅'
+//     };
+//   }
+// }
 
 // ===== API ENDPOINTS =====
 
