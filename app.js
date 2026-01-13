@@ -5,6 +5,8 @@ const cron = require('node-cron');
 const qs = require('querystring');
 const cors = require('cors');
 const { monitorStuckConversations } = require('./Monitoringservice');
+const CallStateService = require('./CallStateService');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -821,6 +823,80 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
     });
   }
 });
+
+
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  CALL STATE API ENDPOINTS                                                     ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
+
+/**
+ * POST /api/call-state
+ * Update or create call state and get next action
+ */
+app.post('/api/call-state', (req, res) => {
+  console.log("=== POST /api/call-state ===");
+  console.log("AI sent vars:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const result = CallStateService.updateCallState(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("❌ [CALL STATE] Error:", err);
+    res.status(500).json({ error: "Server error", message: err.message });
+  }
+});
+
+/**
+ * GET /api/call-state/chart
+ * Debug endpoint - view all call states
+ */
+app.get('/api/call-state/chart', (req, res) => {
+  try {
+    const result = CallStateService.getAllCallStates();
+    res.json(result);
+  } catch (err) {
+    console.error("❌ [CALL STATE] Error fetching chart:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/**
+ * GET /api/call-state/:callId
+ * Get specific call state by ID
+ */
+app.get('/api/call-state/:callId', (req, res) => {
+  try {
+    const callState = CallStateService.getCallState(req.params.callId);
+    if (callState) {
+      res.json(callState);
+    } else {
+      res.status(404).json({ error: "Call not found" });
+    }
+  } catch (err) {
+    console.error("❌ [CALL STATE] Error fetching call:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/**
+ * DELETE /api/call-state/cleanup
+ * Clean up old call data (optional maintenance endpoint)
+ */
+app.delete('/api/call-state/cleanup', (req, res) => {
+  try {
+    const hoursOld = parseInt(req.query.hours) || 24;
+    const result = CallStateService.clearOldCallData(hoursOld);
+    res.json({ 
+      success: true, 
+      message: `Cleaned up calls older than ${hoursOld} hours`,
+      ...result 
+    });
+  } catch (err) {
+    console.error("❌ [CALL STATE] Error during cleanup:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 app.get('/api/health', async (req, res) => {
   try {
