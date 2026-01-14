@@ -5,12 +5,12 @@ const cron = require('node-cron');
 const qs = require('querystring');
 const cors = require('cors');
 const { monitorStuckConversations } = require('./Monitoringservice');
-const CallStateService = require('./CallStateService');
-
+const { computeNextAction } = require('./CallStateService'); // If it's an object
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+let callData = {};
 
 const PORT = process.env.PORT || 3000;
 
@@ -60,7 +60,7 @@ function getMinutesSinceGoogleTimestamp(googleTimestamp) {
 function parseGoogleTimestamp(googleTimestamp) {
   const utcDate = new Date(googleTimestamp);
   const localDate = new Date(utcDate.toLocaleString('en-US', { timeZone: process.env.TIME_ZONE || 'America/New_York' }));
-  
+
   return {
     utcTime: utcDate.toISOString(),
     localTime: localDate.toLocaleString('en-US', { timeZone: process.env.TIME_ZONE || 'America/New_York' }),
@@ -77,22 +77,22 @@ function parseGoogleTimestamp(googleTimestamp) {
 function parseGoogleAdsTimestamp(googleTimestamp, accountTimezone) {
   // Google returns: "2025-12-03 01:59:08" (in account timezone, NO timezone indicator)
   // JavaScript's new Date() would wrongly interpret this as UTC/local server time
-  
+
   if (!googleTimestamp) return null;
-  
+
   const tz = accountTimezone || process.env.TIME_ZONE || 'America/New_York';
-  
+
   // Handle ISO format (already has timezone info like "Z" or "+00:00")
   if (googleTimestamp.includes('T') && (googleTimestamp.includes('Z') || googleTimestamp.includes('+') || googleTimestamp.match(/-\d{2}:\d{2}$/))) {
     return new Date(googleTimestamp).getTime();
   }
-  
+
   // For Google Ads format "YYYY-MM-DD HH:MM:SS" (no timezone indicator)
   // This timestamp is in the ACCOUNT's timezone
-  
+
   // Get the timezone offset for the account timezone
   const now = new Date();
-  
+
   // Create formatter for the account timezone
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -104,29 +104,29 @@ function parseGoogleAdsTimestamp(googleTimestamp, accountTimezone) {
     second: '2-digit',
     hour12: false
   });
-  
+
   // Get current time in both UTC and account timezone to calculate offset
   const utcNow = new Date();
   const utcString = utcNow.toISOString().slice(0, 19).replace('T', ' ');
-  
+
   const tzParts = formatter.formatToParts(utcNow);
   const tzObj = {};
   tzParts.forEach(p => { if (p.type !== 'literal') tzObj[p.type] = p.value; });
   const tzString = `${tzObj.year}-${tzObj.month}-${tzObj.day} ${tzObj.hour}:${tzObj.minute}:${tzObj.second}`;
-  
+
   // Calculate offset: how many ms ahead/behind is the timezone from UTC
   const utcMs = new Date(utcString.replace(' ', 'T') + 'Z').getTime();
   const tzMs = new Date(tzString.replace(' ', 'T') + 'Z').getTime();
   const offsetMs = tzMs - utcMs;
-  
+
   // Parse the Google timestamp as if it were UTC
   const googleMs = new Date(googleTimestamp.replace(' ', 'T') + 'Z').getTime();
-  
+
   // Convert to actual UTC by subtracting the offset
   // If timezone is EST (UTC-5), offset is negative (-18000000ms)
   // Google says "01:59 EST" = 01:59 + 5 hours = 06:59 UTC
   const actualUtcMs = googleMs - offsetMs;
-  
+
   return actualUtcMs;
 }
 
@@ -137,11 +137,11 @@ function parseGoogleAdsTimestamp(googleTimestamp, accountTimezone) {
 function getActualMinutesSinceGoogleTimestamp(googleTimestamp, accountTimezone) {
   const actualUtcMs = parseGoogleAdsTimestamp(googleTimestamp, accountTimezone);
   if (!actualUtcMs) return 0;
-  
+
   const now = Date.now();
   const diffMs = now - actualUtcMs;
   const diffMinutes = Math.floor(diffMs / 60000);
-  
+
   return Math.max(0, diffMinutes);
 }
 
@@ -157,7 +157,7 @@ function getCurrentEdtTime() {
     second: '2-digit',
     hour12: false
   });
-  
+
   const parts = edtFormatter.formatToParts(now);
   const dateParts = {};
   parts.forEach(part => {
@@ -165,7 +165,7 @@ function getCurrentEdtTime() {
       dateParts[part.type] = part.value;
     }
   });
-  
+
   return `${dateParts.year}-${dateParts.month}-${dateParts.day}T${dateParts.hour}:${dateParts.minute}:${dateParts.second}-04:00`;
 }
 
@@ -192,7 +192,7 @@ function getCalendarParameters(daysAhead = 10) {
   const currentTimestamp = getCurrentTimestamp();
   const startDate = currentTimestamp;
   const endDate = currentTimestamp + (daysAhead * 24 * 60 * 60 * 1000);
-  
+
   return {
     startDate: startDate,
     endDate: endDate,
@@ -204,14 +204,14 @@ function getCalendarParameters(daysAhead = 10) {
 
 async function getGoogleAccessToken() {
   const now = Date.now();
-  
+
   if (tokenCache.accessToken && now < tokenCache.expiresAt - 60000) {
     console.log('✅ Using cached access token');
     return tokenCache.accessToken;
   }
 
   console.log('🔄 Auto-generating new Google access token...');
-  
+
   try {
     const response = await axios.post(
       'https://oauth2.googleapis.com/token',
@@ -228,10 +228,10 @@ async function getGoogleAccessToken() {
 
     tokenCache.accessToken = response.data.access_token;
     tokenCache.expiresAt = now + (response.data.expires_in * 1000);
-    
+
     console.log(`✅ New access token generated successfully`);
     return tokenCache.accessToken;
-    
+
   } catch (error) {
     console.error('❌ Failed to generate access token:', error.response?.data || error.message);
     throw new Error(`Token generation failed: ${error.response?.data?.error_description || error.message}`);
@@ -243,22 +243,22 @@ async function getGoogleAccessToken() {
 async function fetchLSALeadsWithConversationHistory(minutes) {
   const now = new Date();
   const cutoffTime = new Date(now.getTime() - minutes * 60 * 1000);
-  
+
   console.log(`🔍 Fetching LSA leads + full conversation history for last ${minutes} minutes`);
-  
+
   const accessToken = await getGoogleAccessToken();
   const headers = {
     'Authorization': `Bearer ${accessToken}`,
     'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
     'Content-Type': 'application/json'
   };
-  
+
   if (GOOGLE_ADS_LOGIN_CUSTOMER_ID) {
     headers['login-customer-id'] = GOOGLE_ADS_LOGIN_CUSTOMER_ID;
   }
 
   const url = `https://googleads.googleapis.com/v21/customers/${GOOGLE_ADS_CUSTOMER_ID}/googleAds:search`;
-  
+
   try {
     const conversationQuery = `
       SELECT 
@@ -275,23 +275,23 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
       ORDER BY local_services_lead_conversation.event_date_time DESC
       LIMIT 250
     `;
-    
+
     const conversationResponse = await axios.post(url, { query: conversationQuery }, { headers });
     const allConversations = conversationResponse.data.results || [];
-    
+
     const conversationsByLead = {};
     const recentActivityLeads = new Set();
-    
+
     allConversations.forEach(conv => {
       const conversation = conv.localServicesLeadConversation;
       const leadResourceName = conversation.lead;
       const leadId = leadResourceName.split('/').pop();
       const eventTime = new Date(conversation.eventDateTime);
-      
+
       if (!conversationsByLead[leadId]) {
         conversationsByLead[leadId] = [];
       }
-      
+
       conversationsByLead[leadId].push({
         id: conversation.id,
         eventDateTime: conversation.eventDateTime,
@@ -302,14 +302,14 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
         callDuration: conversation.phoneCallDetails?.callDurationMillis || null,
         callRecordingUrl: conversation.phoneCallDetails?.callRecordingUrl || null
       });
-      
+
       if (eventTime >= cutoffTime) {
         recentActivityLeads.add(leadId);
       }
     });
-    
+
     console.log(`📊 Found conversations for ${Object.keys(conversationsByLead).length} leads, ${recentActivityLeads.size} with recent activity`);
-    
+
     const leadQuery = `
       SELECT 
         local_services_lead.lead_type,
@@ -328,54 +328,54 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
       ORDER BY local_services_lead.creation_date_time DESC
       LIMIT 250
     `;
-    
+
     const leadResponse = await axios.post(url, { query: leadQuery }, { headers });
     const allLeads = leadResponse.data.results || [];
-    
+
     console.log(`📊 Found ${allLeads.length} total leads`);
-    
+
     const enrichedLeads = [];
     const currentTimestamp = getCurrentTimestamp();
     const currentEdtTime = getCurrentEdtTime();
     const currentEdtTimeFormatted = getCurrentEdtTimeFormatted();
     const calendarParams = getCalendarParameters(10);
-    
+
     for (const result of allLeads) {
       const lead = result.localServicesLead;
       const createdTime = new Date(lead.creationDateTime);
       const leadConversations = conversationsByLead[lead.id] || [];
-      
-      const latestConversationTime = leadConversations.length > 0 
+
+      const latestConversationTime = leadConversations.length > 0
         ? new Date(Math.max(...leadConversations.map(c => new Date(c.eventDateTime))))
         : createdTime;
-      
+
       const isNewLead = createdTime >= cutoffTime;
       const hasRecentActivity = recentActivityLeads.has(lead.id);
-      
+
       if (isNewLead || hasRecentActivity) {
         const includePhoneLeads = ADD_PHONE_LEADS === 'true';
         if (lead.leadType === 'PHONE_CALL' && !includePhoneLeads) {
           console.log(`⏭️ Skipping phone lead ${lead.id}`);
           continue;
         }
-        
+
         const latestConsumerMessage = leadConversations
           .filter(c => c.participantType === 'CONSUMER')
           .sort((a, b) => new Date(b.eventDateTime) - new Date(a.eventDateTime))[0];
-        
-        const messageText = latestConsumerMessage?.messageText || 
-                           (lead.leadType === 'MESSAGE' ? 'Message content not available' : 
-                            lead.leadType === 'PHONE_CALL' ? 'Phone call inquiry' :
-                            `${lead.leadType} inquiry`);
+
+        const messageText = latestConsumerMessage?.messageText ||
+          (lead.leadType === 'MESSAGE' ? 'Message content not available' :
+            lead.leadType === 'PHONE_CALL' ? 'Phone call inquiry' :
+              `${lead.leadType} inquiry`);
 
         const contactDetails = lead.contactDetails || {};
-        
+
         const enrichedLead = {
           leadId: lead.id,
           leadType: lead.leadType,
           leadStatus: lead.leadStatus,
           messageText: messageText,
-          
+
           timing: {
             creationDateTime: lead.creationDateTime,
             lastActivityDateTime: latestConversationTime.toISOString(),
@@ -386,14 +386,14 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             currentTimeFormatted: currentEdtTimeFormatted,
             currentTimestamp: currentTimestamp
           },
-          
+
           calendarParams: calendarParams,
-          
+
           conversationHistory: {
             totalConversations: leadConversations.length,
             conversations: leadConversations.sort((a, b) => new Date(a.eventDateTime) - new Date(b.eventDateTime))
           },
-          
+
           leadDetails: {
             categoryId: lead.categoryId,
             serviceId: lead.serviceId,
@@ -401,13 +401,13 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             leadCharged: lead.leadCharged,
             creditState: lead.creditDetails?.creditState || null
           },
-          
+
           contactInfo: {
             name: contactDetails.consumerName || '',
             phone: contactDetails.phoneNumber || '',
             email: contactDetails.email || ''
           },
-          
+
           ghlContactData: {
             locationId: process.env.GHL_LOCATION_ID || 'uVlhM6VHsupswi3yUiOZ',
             firstName: contactDetails.consumerName || '',
@@ -429,17 +429,17 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
             ]
           }
         };
-        
+
         enrichedLeads.push(enrichedLead);
-        
+
         if (hasRecentActivity && !isNewLead) {
           console.log(`🔄 Including lead ${lead.id} due to recent conversation activity (${leadConversations.length} total conversations)`);
         }
       }
     }
-    
+
     console.log(`🎯 Processed ${enrichedLeads.length} leads`);
-    
+
     return {
       success: true,
       leads: enrichedLeads,
@@ -447,7 +447,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
       totalLeadsChecked: allLeads.length,
       recentActivityCount: recentActivityLeads.size
     };
-    
+
   } catch (error) {
     console.error('❌ Error fetching leads:', error.response?.data || error.message);
     return {
@@ -469,11 +469,11 @@ async function sendToLindy(payload) {
 
   if (payload.conversationHistory && payload.conversationHistory.conversations.length > 0) {
     const lastMessage = payload.conversationHistory.conversations[payload.conversationHistory.conversations.length - 1];
-    
+
     if (lastMessage.participantType === 'ADVERTISER') {
       console.log(`🚫 Skipping lead ${payload.leadId} - Last message from ADVERTISER (preventing loop)`);
-      return { 
-        success: false, 
+      return {
+        success: false,
         leadId: payload.leadId,
         error: 'Skipped - preventing bot loop'
       };
@@ -492,18 +492,18 @@ async function sendToLindy(payload) {
       },
       timeout: 15000
     });
-    
+
     console.log(`✅ Sent lead ${payload.leadId} to Lindy: ${response.status}`);
-    return { 
-      success: true, 
+    return {
+      success: true,
       leadId: payload.leadId,
       status: response.status
     };
-    
+
   } catch (error) {
     console.error(`❌ Failed to send lead ${payload.leadId}:`, error.message);
-    return { 
-      success: false, 
+    return {
+      success: false,
       leadId: payload.leadId,
       error: error.message
     };
@@ -514,9 +514,9 @@ async function sendToLindy(payload) {
 // NOTE: This function is NOT changed
 async function pollLeadsAndSendToLindy() {
   console.log(`\n🔄 Starting polling for last ${POLL_BACK_MINUTES} minutes...`);
-  
+
   const leadsResult = await fetchLSALeadsWithConversationHistory(POLL_BACK_MINUTES);
-  
+
   if (!leadsResult.success) {
     console.error(`❌ Failed to fetch leads: ${leadsResult.error}`);
     return {
@@ -526,7 +526,7 @@ async function pollLeadsAndSendToLindy() {
       sent: 0
     };
   }
-  
+
   if (leadsResult.count === 0) {
     console.log(`📭 No leads found in last ${POLL_BACK_MINUTES} minutes`);
     return {
@@ -536,20 +536,20 @@ async function pollLeadsAndSendToLindy() {
       message: 'No leads found'
     };
   }
-  
+
   console.log(`📬 Processing ${leadsResult.count} leads...`);
-  
+
   const lindyResults = [];
-  
+
   for (const lead of leadsResult.leads) {
     const result = await sendToLindy(lead);
     lindyResults.push(result);
   }
-  
+
   const sentCount = lindyResults.filter(r => r.success).length;
-  
+
   console.log(`✅ Processing complete: ${sentCount}/${leadsResult.count} sent to Lindy\n`);
-  
+
   return {
     success: true,
     processed: leadsResult.count,
@@ -570,41 +570,41 @@ async function pollLeadsAndSendToLindy() {
 //   console.log('\n🔍 ========================================');
 //   console.log('🔍 MONITORING: Checking for stuck workflows...');
 //   console.log('🔍 ========================================');
-  
+
 //   const { sendStuckLeadAlert } = require('./emailService');
-  
+
 //   const leadsResult = await fetchLSALeadsWithConversationHistory(MONITORING_CONFIG.lookbackMinutes);
-  
+
 //   if (!leadsResult.success || leadsResult.count === 0) {
 //     console.log('📭 No leads to monitor');
 //     return { success: true, stuckLeads: [], checked: 0 };
 //   }
-  
+
 //   const stuckLeads = [];
 //   const now = Date.now();
 //   const accountTimezone = process.env.TIME_ZONE || 'America/New_York';
-  
+
 //   console.log(`\n🔍 Checking ${leadsResult.count} leads for stuck conversations...`);
 //   console.log(`   Stuck threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} minutes`);
 //   console.log(`   Account timezone: ${accountTimezone}`);
 //   console.log(`   Server time (UTC): ${new Date().toISOString()}`);
 //   console.log(`   Server time (${accountTimezone}): ${new Date().toLocaleString('en-US', { timeZone: accountTimezone })}\n`);
-  
+
 //   for (const lead of leadsResult.leads) {
 //     const conversations = lead.conversationHistory.conversations;
-    
+
 //     if (conversations.length === 0) {
 //       console.log(`⏭️ Lead ${lead.leadId}: No conversations`);
 //       continue;
 //     }
-    
+
 //     const lastMessage = conversations[conversations.length - 1];
-    
+
 //     if (!lastMessage) {
 //       console.log(`⏭️ Lead ${lead.leadId}: No messages found`);
 //       continue;
 //     }
-    
+
 //     // ╔═══════════════════════════════════════════════════════════════════════════╗
 //     // ║  FIX: Use the new function that correctly handles timezone               ║
 //     // ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -612,35 +612,35 @@ async function pollLeadsAndSendToLindy() {
 //       lastMessage.eventDateTime, 
 //       accountTimezone
 //     );
-    
+
 //     console.log(`\n📋 Lead ${lead.leadId}: ${conversations.length} messages total`);
 //     console.log(`   Last message from: ${lastMessage.participantType}`);
 //     console.log(`   Google timestamp (account tz): ${lastMessage.eventDateTime}`);
 //     console.log(`   ⏱️ ACTUAL minutes since message: ${minutesSinceLastMessage} min`);
 //     console.log(`   Threshold: ${MONITORING_CONFIG.stuckThresholdMinutes} min`);
-    
+
 //     // CHECK 1: Is the last message from CONSUMER?
 //     if (lastMessage.participantType !== 'CONSUMER') {
 //       console.log(`   ✅ SKIP: Last message is from ${lastMessage.participantType} - AI responded`);
 //       continue;
 //     }
-    
+
 //     console.log(`   ✓ Check 1 passed: Last message IS from CONSUMER`);
-    
+
 //     // CHECK 2: Have threshold minutes passed? (NOW USING CORRECT CALCULATION)
 //     if (minutesSinceLastMessage < MONITORING_CONFIG.stuckThresholdMinutes) {
 //       console.log(`   ✅ SKIP: Only ${minutesSinceLastMessage} min passed (need ${MONITORING_CONFIG.stuckThresholdMinutes} min)`);
 //       continue;
 //     }
-    
+
 //     console.log(`   ✓ Check 2 passed: ${minutesSinceLastMessage} >= ${MONITORING_CONFIG.stuckThresholdMinutes}`);
-    
+
 //     // CHECK 3: Skip very old messages
 //     if (minutesSinceLastMessage > MONITORING_CONFIG.maxMessageAgeMinutes) {
 //       console.log(`   ⏭️ SKIP: Message too old (${minutesSinceLastMessage} min > ${MONITORING_CONFIG.maxMessageAgeMinutes} max)`);
 //       continue;
 //     }
-    
+
 //     // All checks passed: This is a genuinely stuck lead
 //     console.log(`🚨 STUCK LEAD DETECTED: ${lead.leadId}`);
 //     console.log(`   ├─ Customer: ${lead.contactInfo.name || 'Unknown'}`);
@@ -648,7 +648,7 @@ async function pollLeadsAndSendToLindy() {
 //     console.log(`   ├─ Waiting: ${minutesSinceLastMessage} minutes (ACTUAL)`);
 //     console.log(`   ├─ Last Message: "${lastMessage.messageText.substring(0, 60)}..."`);
 //     console.log(`   └─ Last Message Time: ${lastMessage.eventDateTime} (${accountTimezone})`);
-    
+
 //     stuckLeads.push({
 //       ...lead,
 //       minutesSinceLastMessage: minutesSinceLastMessage,
@@ -660,14 +660,14 @@ async function pollLeadsAndSendToLindy() {
 //       hasAIResponse: false
 //     });
 //   }
-  
+
 //   console.log(`\n📊 Monitoring Results:`);
 //   console.log(`   Total leads checked: ${leadsResult.count}`);
 //   console.log(`   Stuck leads found: ${stuckLeads.length}`);
-  
+
 //   if (stuckLeads.length > 0) {
 //     console.log(`\n📧 Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
-    
+
 //     // // ===== START: AUTO-RETRY BLOCK =====
 //     // console.log(`\n🔄 Re-sending ${stuckLeads.length} stuck lead(s) to Lindy for retry...`);
 //     // for (const stuckLead of stuckLeads) {
@@ -679,26 +679,26 @@ async function pollLeadsAndSendToLindy() {
 //     //   }
 //     // }
 //     // // ===== END: AUTO-RETRY BLOCK =====
-    
+
 //     const emailResult = await sendStuckLeadAlert(stuckLeads);
-    
+
 //     if (emailResult.statusCode === 200) {
 //       console.log(`✅ Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
 //       console.log(`   Message ID: ${emailResult.messageId}`);
 //     } else {
 //       console.log(`❌ Email alert failed: ${emailResult.message}`);
 //     }
-    
+
 //     return {
 //       success: true,
 //       stuckLeads: stuckLeads,
 //       checked: leadsResult.count,
 //       emailSent: emailResult.statusCode === 200
 //     };
-    
+
 //   } else {
 //     console.log(`✅ All conversations are healthy - no alerts needed`);
-    
+
 //     return {
 //       success: true,
 //       stuckLeads: [],
@@ -714,7 +714,7 @@ async function pollLeadsAndSendToLindy() {
 app.get('/api/poll-now', async (req, res) => {
   try {
     const result = await pollLeadsAndSendToLindy();
-    
+
     res.json({
       success: result.success,
       message: result.error || 'Polling completed',
@@ -731,7 +731,7 @@ app.get('/api/poll-now', async (req, res) => {
         calendarDaysAhead: 10
       }
     });
-    
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -745,7 +745,7 @@ app.get('/api/monitor-stuck', async (req, res) => {
   try {
     console.log('\n🔍 Manual monitoring check triggered via API...\n');
     const result = await monitorStuckConversations();
-    
+
     res.json({
       success: result.success,
       message: result.message || `Monitoring completed`,
@@ -774,7 +774,7 @@ app.get('/api/monitor-stuck', async (req, res) => {
         clientTimezone: process.env.TIME_ZONE
       }
     });
-    
+
   } catch (error) {
     console.error('❌ Monitoring API error:', error);
     res.status(500).json({
@@ -787,16 +787,16 @@ app.get('/api/monitor-stuck', async (req, res) => {
 
 app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
   console.log('📅 Auto-proxy called');
-  
+
   const currentTimestamp = Date.now();
   const startDate = currentTimestamp;
   const endDate = currentTimestamp + (10 * 24 * 60 * 60 * 1000);
-  
+
   const calendarId = req.query.calendarId;
   const authToken = process.env.GHL_ACCESS_TOKEN;
-  
+
   console.log(`🔢 Using timestamps: startDate=${startDate}, endDate=${endDate}`);
-  
+
   try {
     const response = await axios.get(
       `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots`,
@@ -812,10 +812,10 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
         }
       }
     );
-    
+
     console.log('✅ Calendar slots retrieved');
     res.json(response.data);
-    
+
   } catch (error) {
     console.error('❌ GHL API error:', error.response?.data || error.message);
     res.status(error.response?.status || 500).json({
@@ -829,70 +829,37 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
 // ║  CALL STATE API ENDPOINTS                                                     ║
 // ╚═══════════════════════════════════════════════════════════════════════════════╝
 
-/**
- * POST /api/call-state
- * Update or create call state and get next action
- */
-app.post('/api/call-state', (req, res) => {
-  console.log("=== POST /api/call-state ===");
+app.post('/check-state', (req, res) => {
+  // Debug: Log exactly what VAPI/AI sent in the tool call
+  console.log("=== POST / hit ===");
   console.log("AI sent vars:", JSON.stringify(req.body, null, 2));
 
   try {
-    const result = CallStateService.updateCallState(req.body);
-    res.json(result);
-  } catch (err) {
-    console.error("❌ [CALL STATE] Error:", err);
-    res.status(500).json({ error: "Server error", message: err.message });
-  }
-});
+    const { callId, phone } = req.body;
+    const id = callId || phone || Date.now().toString();
 
-/**
- * GET /api/call-state/chart
- * Debug endpoint - view all call states
- */
-app.get('/api/call-state/chart', (req, res) => {
-  try {
-    const result = CallStateService.getAllCallStates();
-    res.json(result);
-  } catch (err) {
-    console.error("❌ [CALL STATE] Error fetching chart:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
+    const result = computeNextAction(req.body);
 
-/**
- * GET /api/call-state/:callId
- * Get specific call state by ID
- */
-app.get('/api/call-state/:callId', (req, res) => {
-  try {
-    const callState = CallStateService.getCallState(req.params.callId);
-    if (callState) {
-      res.json(callState);
-    } else {
-      res.status(404).json({ error: "Call not found" });
-    }
-  } catch (err) {
-    console.error("❌ [CALL STATE] Error fetching call:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
+    callData[id] = {
+      ...(callData[id] || {}),
+      ...req.body,
+      phase: result.phase,
+      instruction: result.instruction,
+      warnings: result.warnings,
+      collected: result.collected
+    };
 
-/**
- * DELETE /api/call-state/cleanup
- * Clean up old call data (optional maintenance endpoint)
- */
-app.delete('/api/call-state/cleanup', (req, res) => {
-  try {
-    const hoursOld = parseInt(req.query.hours) || 24;
-    const result = CallStateService.clearOldCallData(hoursOld);
-    res.json({ 
-      success: true, 
-      message: `Cleaned up calls older than ${hoursOld} hours`,
-      ...result 
+    console.log(`Updated state for ${id}:`, callData[id]);
+
+    res.json({
+      next_action: result.phase,
+      instruction: result.instruction,
+      warnings: result.warnings,
+      collected: result.collected,
+      full_chart: callData[id]
     });
   } catch (err) {
-    console.error("❌ [CALL STATE] Error during cleanup:", err);
+    console.error("POST error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -901,7 +868,7 @@ app.delete('/api/call-state/cleanup', (req, res) => {
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
-    
+
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
@@ -942,7 +909,7 @@ app.get('/api/health', async (req, res) => {
         hasValidToken: !!accessToken
       }
     });
-    
+
   } catch (error) {
     res.status(500).json({
       status: 'error',
@@ -963,21 +930,21 @@ if (process.env.NODE_ENV !== 'test') {
     }
   });
   console.log(`⏰ Polling cron scheduled: Every ${POLL_INTERVAL_MINUTES} minutes (looking back ${POLL_BACK_MINUTES} min)`);
-  
+
   cron.schedule(`*/${MONITORING_CONFIG.intervalMinutes} * * * *`, async () => {
     console.log('\n═══════════════════════════════════════════════════════');
     console.log('🔍 AUTOMATED MONITORING CHECK');
     console.log(`⏰ Time: ${new Date().toLocaleString('en-US', { timeZone: process.env.TIME_ZONE })}`);
     console.log('═══════════════════════════════════════════════════════');
-    
+
     try {
       const result = await monitorStuckConversations();
-      
+
       console.log('\n📋 MONITORING SUMMARY:');
       console.log(`   ├─ Leads Checked: ${result.checked}`);
       console.log(`   ├─ Stuck Leads: ${result.stuckLeads.length}`);
       console.log(`   └─ Email Sent: ${result.emailSent ? 'YES ✅' : 'NO ⏸️'}`);
-      
+
       if (result.stuckLeads.length > 0) {
         console.log('\n🚨 ALERT: Email notification sent');
         console.log(`   Recipient: ${process.env.NOTIFICATION_EMAIL}`);
@@ -985,15 +952,15 @@ if (process.env.NODE_ENV !== 'test') {
           console.log(`   • Lead ${lead.leadId}: ${lead.minutesSinceLastMessage} min wait (ACTUAL)`);
         });
       }
-      
+
       console.log('═══════════════════════════════════════════════════════\n');
-      
+
     } catch (error) {
       console.error('❌ [MONITORING ERROR]:', error.message);
       console.log('═══════════════════════════════════════════════════════\n');
     }
   });
-  
+
   console.log(`⏰ Monitoring cron scheduled: Every ${MONITORING_CONFIG.intervalMinutes} minutes\n`);
 }
 
