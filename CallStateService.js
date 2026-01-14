@@ -47,6 +47,13 @@ function computeNextAction(body) {
     isQualified = ncConfirmed && estateValue !== "";
   }
 
+  if (category === "Probate" && !ncConfirmed) {
+    phase = "DISQUALIFY";
+    instruction = "Say: 'I'm sorry — we're only licensed for North Carolina probate cases. I wish I could help, but we're not the right fit.' Then ask: 'Do you have any other questions I can help with?' If no, say 'Best of luck. Take care.' and call end_call. If yes, answer briefly, then ask again 'Anything else?' and repeat until no.";
+    warnings.push("CRITICAL: Disqualify NC Probate — no scheduling, loop only on 'anything else' until no.");
+    return { phase, instruction, warnings, collected: {} }; // Early return
+  }
+
   if (!category) {
     phase = "CATEGORIZE";
     instruction = "Listen to the caller's description. Set category to 'Probate' if about death/inheritance, or 'Estate Planning' if about future planning/will.";
@@ -79,7 +86,7 @@ function computeNextAction(body) {
     warnings.push("DO NOT re-ask collected info.");
   } else {
     phase = "CONFIRM";
-    instruction = "Call send_booking_to_lindy_workflow (SILENT). Then enter closing loop: ask 'Anything else?' and loop until no.";
+    instruction = "Call send_booking_to_lindy_workflow (SILENT). Then: 'You're all set for [day of week] [Month Day] at [time].' (use exact day/date/time from collected_slot). Then enter closing loop: ask 'Is there anything else I can help you with today?' and repeat until no.";
   }
 
   return {
