@@ -44,14 +44,7 @@ function computeNextAction(body) {
   if (category === "Estate Planning") {
     isQualified = age55 && assets;
   } else if (category === "Probate") {
-    isQualified = ncConfirmed && estateValue !== "";
-  }
-
-  if (category === "Probate" && !ncConfirmed) {
-    phase = "DISQUALIFY";
-    instruction = "Say: 'I'm sorry — we're only licensed for North Carolina probate cases. I wish I could help, but we're not the right fit.' Then ask: 'Do you have any other questions I can help with?' If no, say 'Best of luck. Take care.' and call end_call. If yes, answer briefly, then ask again 'Anything else?' and repeat until no.";
-    warnings.push("CRITICAL: Disqualify NC Probate — no scheduling, loop only on 'anything else' until no.");
-    return { phase, instruction, warnings, collected: {} }; // Early return
+    isQualified = ncConfirmed && estateValue && estateValue !== "";
   }
 
   if (!category) {
@@ -60,13 +53,25 @@ function computeNextAction(body) {
   } else if (!isQualified) {
     phase = "QUALIFY";
     instruction = `Ask missing qualification questions for ${category} one by one:`;
+
     if (category === "Estate Planning") {
       if (!age55) instruction += " Ask: 'Are you 55 years or older?' (set age55=true if yes);";
       if (!assets) instruction += " Ask: 'Do you own property or real estate worth over $200,000 OR have savings and investments worth more than $100,000 that you'd like to protect?' (set assets=true if yes);";
+      warnings.push("No condolences needed for Estate Planning.");
     }
+
     if (category === "Probate") {
-      if (!ncConfirmed) instruction += " Ask: 'Did the person who died, resided in NC or had real estate there?' (set ncConfirmed=true if yes);";
+      if (!ncConfirmed) instruction += " Ask: 'Did the person who died reside in NC or have real estate there?' (set ncConfirmed=true if yes);";
       if (estateValue === "") instruction += " Ask: 'Do you know the estimated value of the estate, including real estate?' (set estateValue to answer);";
+      warnings.push("Say 'I'm sorry for your loss' ONLY if not said before.");
+
+      // NC Disqualification — only trigger AFTER asking NC question and getting "no"
+      if (ncConfirmed === false) {  // User answered "no" or didn't confirm
+        phase = "DISQUALIFY";
+        instruction = "Say: 'I'm sorry — we're only licensed for North Carolina probate cases. I wish I could help, but we're not the right fit.' Then ask: 'Do you have any other questions I can help with?' If no, say 'Best of luck. Take care.' and call end_call. If yes, answer briefly, then ask again 'Anything else?' and repeat until no.";
+        warnings.push("CRITICAL: NC not confirmed — disqualify Probate. No scheduling.");
+        return { phase, instruction, warnings, collected: {} }; // Stop further logic
+      }
     }
   } else if (!hasName) {
     phase = "COLLECT_NAME";
