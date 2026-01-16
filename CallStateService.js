@@ -67,8 +67,8 @@ function computeNextAction(body) {
   } else if (!hasSlot) {
     phase = "BOOKING";
     instruction = category === "Probate"
-      ? "Ask permission, then call calenterFetchProbate. Present 2–3 slots/day, max 3 days: 'Slots today at [1], [2], [3], tomorrow at [1], [2], and more this week. When works?' If user selects slot, set collected_slot to ISO."
-      : "Ask permission, then call calenterFetchEstate. Present 2–3 slots/day, max 3 days: 'Slots today at [1], [2], [3], tomorrow at [1], [2], and more this week. When works?' If user selects slot, set collected_slot to ISO.";
+      ? "Ask permission, then call calendarFetchProbate. Present 2–3 slots/day, max 3 days: 'Slots today at [1], [2], [3], tomorrow at [1], [2], and more this week. When works?' If user selects slot, set collected_slot to ISO."
+      : "Ask permission, then call calendarFetchEstate. Present 2–3 slots/day, max 3 days: 'Slots today at [1], [2], [3], tomorrow at [1], [2], and more this week. When works?' If user selects slot, set collected_slot to ISO.";
     warnings.push("Call calendar ONCE. DO NOT re-ask collected info.");
   } else {
     phase = "CONFIRM";
