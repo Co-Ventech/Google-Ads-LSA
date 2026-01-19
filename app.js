@@ -816,28 +816,42 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
       return ['th', 'st', 'nd', 'rd'][Math.min(n % 10, 4)] || 'th';
     };
 
+    const timezoneFromOffset = (offset) => {
+      const map = {
+        '-05:00': 'EST',
+        '-06:00': 'CST',
+        '-07:00': 'MST',
+        '-08:00': 'PST'
+      };
+      return map[offset] || `UTC${offset}`;
+    };
+
     Object.entries(data).forEach(([dateKey, value]) => {
-      // 🔒 Skip traceId or anything not a date
+      // ✅ Skip traceId or invalid keys
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
       if (!value?.slots) return;
 
       value.slots.forEach((iso) => {
-        // Example: 2026-01-21T13:30:00-05:00
-        const [datePart, timePart] = iso.split('T');
-        const [hour, minute] = timePart.split(':');
+        // ISO example: 2026-01-21T13:30:00-05:00
+        const [datePart, timeAndZone] = iso.split('T');
+        const [timePart, offset] = timeAndZone.split(/([+-]\d{2}:\d{2})/);
+
+        const [hourStr, minuteStr] = timePart.split(':');
+        let hour = parseInt(hourStr, 10);
+        const minute = minuteStr;
+
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12 || 12;
 
         const dateObj = new Date(`${datePart}T00:00:00`);
-
         const weekday = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
         const month = dateObj.toLocaleDateString('en-US', { month: 'long' });
         const day = dateObj.getDate();
 
-        let h = parseInt(hour, 10);
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12 || 12;
+        const timezoneLabel = timezoneFromOffset(offset);
 
         formattedSlots.push(
-          `${weekday} ${month} ${day}${ordinal(day)} at ${h}:${minute} ${ampm}`
+          `${weekday} ${month} ${day}${ordinal(day)} at ${hour}:${minute} ${ampm} ${timezoneLabel}`
         );
       });
     });
