@@ -795,26 +795,57 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
   const calendarId = req.query.calendarId;
   const authToken = process.env.GHL_ACCESS_TOKEN;
 
-  console.log(`🔢 Using timestamps: startDate=${startDate}, endDate=${endDate}`);
-
   try {
     const response = await axios.get(
       `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots`,
       {
-        params: {
-          startDate: startDate,
-          endDate: endDate
-        },
+        params: { startDate, endDate },
         headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-          'Version': '2021-04-15'
+          Accept: 'application/json',
+          Authorization: `Bearer ${authToken}`,
+          Version: '2021-04-15'
         }
       }
     );
 
-    console.log('✅ Calendar slots retrieved');
-    res.json(response.data);
+    const data = response.data;
+    const formattedSlots = [];
+
+    const ordinal = (n) => {
+      if (n >= 11 && n <= 13) return 'th';
+      return ['th', 'st', 'nd', 'rd'][Math.min(n % 10, 4)] || 'th';
+    };
+
+    Object.entries(data).forEach(([dateKey, value]) => {
+      // 🔒 Skip traceId or anything not a date
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+      if (!value?.slots) return;
+
+      value.slots.forEach((iso) => {
+        // Example: 2026-01-21T13:30:00-05:00
+        const [datePart, timePart] = iso.split('T');
+        const [hour, minute] = timePart.split(':');
+
+        const dateObj = new Date(`${datePart}T00:00:00`);
+
+        const weekday = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+        const month = dateObj.toLocaleDateString('en-US', { month: 'long' });
+        const day = dateObj.getDate();
+
+        let h = parseInt(hour, 10);
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+
+        formattedSlots.push(
+          `${weekday} ${month} ${day}${ordinal(day)} at ${h}:${minute} ${ampm}`
+        );
+      });
+    });
+
+    res.json({
+      traceId: data.traceId,
+      slots: formattedSlots
+    });
 
   } catch (error) {
     console.error('❌ GHL API error:', error.response?.data || error.message);
@@ -823,6 +854,7 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
     });
   }
 });
+
 
 
 // ╔═══════════════════════════════════════════════════════════════════════════════╗
