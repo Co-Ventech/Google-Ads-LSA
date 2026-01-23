@@ -869,7 +869,154 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
   }
 });
 
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  GHL CALENDAR FREE SLOTS API - Flexible & Formatted                           ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
 
+app.get('/api/get-free-slots', async (req, res) => {
+  console.log('📅 GET /api/get-free-slots called');
+
+  try {
+    // Get configuration from env variables (can be overridden by query params)
+    const calendarId = req.query.calendarId || process.env.PROBATE_CALENDAR_ID;
+    const authToken = req.query.authToken || process.env.GHL_ACCESS_TOKEN;
+    const apiVersion = req.query.apiVersion || process.env.GHL_CALENDAR_API_VERSION || '2021-04-15';
+
+    // Validate required parameters
+    if (!calendarId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Calendar ID is required. Provide via query param or GHL_CALENDAR_ID env variable.'
+      });
+    }
+
+    if (!authToken) {
+      return res.status(400).json({
+        success: false,
+        error: 'Auth token is required. Provide via query param or GHL_ACCESS_TOKEN env variable.'
+      });
+    }
+
+    // Date range: Accept from query params or default to 10 days ahead
+    const daysAhead = parseInt(req.query.daysAhead) || 10;
+    const currentTimestamp = Date.now();
+    const startDate = req.query.startDate || currentTimestamp;
+    const endDate = req.query.endDate || (currentTimestamp + (daysAhead * 24 * 60 * 60 * 1000));
+
+    console.log(`📅 Fetching slots for calendar: ${calendarId}`);
+    console.log(`📅 Date range: ${new Date(parseInt(startDate)).toLocaleDateString()} - ${new Date(parseInt(endDate)).toLocaleDateString()}`);
+
+    // Call GHL API
+    const response = await axios.get(
+      `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots`,
+      {
+        params: { startDate, endDate },
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${authToken}`,
+          Version: apiVersion
+        }
+      }
+    );
+
+    const rawData = response.data;
+    const formattedSlots = [];
+
+    // Helper function for ordinal suffixes (1st, 2nd, 3rd, etc.)
+    const getOrdinal = (n) => {
+      if (n >= 11 && n <= 13) return 'th';
+      const lastDigit = n % 10;
+      if (lastDigit === 1) return 'st';
+      if (lastDigit === 2) return 'nd';
+      if (lastDigit === 3) return 'rd';
+      return 'th';
+    };
+
+    // Helper function to get timezone label from offset
+    const getTimezoneLabel = (offset) => {
+      const timezoneMap = {
+        '-05:00': 'EST',
+        '-04:00': 'EDT',
+        '-06:00': 'CST',
+        '-05:00': 'CDT',
+        '-07:00': 'MST',
+        '-06:00': 'MDT',
+        '-08:00': 'PST',
+        '-07:00': 'PDT'
+      };
+      return timezoneMap[offset] || `UTC${offset}`;
+    };
+
+    // Process each date and its slots
+    Object.entries(rawData).forEach(([dateKey, value]) => {
+      // Skip non-date keys (like traceId)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
+      if (!value?.slots || !Array.isArray(value.slots)) return;
+
+      value.slots.forEach((isoTimestamp) => {
+        try {
+          // Parse ISO timestamp: "2026-01-22T15:30:00-05:00"
+          const [datePart, timeAndZone] = isoTimestamp.split('T');
+          
+          // Extract time and timezone offset
+          const timezoneMatch = timeAndZone.match(/([+-]\d{2}:\d{2})$/);
+          const offset = timezoneMatch ? timezoneMatch[1] : '-05:00';
+          const timePart = timeAndZone.replace(offset, '');
+
+          // Parse hour and minute
+          const [hourStr, minuteStr] = timePart.split(':');
+          let hour = parseInt(hourStr, 10);
+          const minute = minuteStr;
+
+          // Convert to 12-hour format
+          const ampm = hour >= 12 ? 'PM' : 'AM';
+          hour = hour % 12 || 12;
+
+          // Parse date information
+          const dateObj = new Date(`${datePart}T00:00:00`);
+          const weekday = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+          const month = dateObj.toLocaleDateString('en-US', { month: 'long' });
+          const day = dateObj.getDate();
+
+          // Get timezone label
+          const timezoneLabel = getTimezoneLabel(offset);
+
+          // Format: "Tuesday January 20th at 2:00 PM EST"
+          const formattedSlot = `${weekday} ${month} ${day}${getOrdinal(day)} at ${hour}:${minute} ${ampm} ${timezoneLabel}`;
+          formattedSlots.push(formattedSlot);
+
+        } catch (error) {
+          console.error(`⚠️ Error parsing timestamp: ${isoTimestamp}`, error.message);
+        }
+      });
+    });
+
+    console.log(`✅ Formatted ${formattedSlots.length} time slots`);
+
+    // Return formatted response
+    res.json({
+      success: true,
+      traceId: rawData.traceId || null,
+      slots: formattedSlots,
+      metadata: {
+        calendarId: calendarId,
+        totalSlots: formattedSlots.length,
+        dateRange: {
+          start: new Date(parseInt(startDate)).toISOString(),
+          end: new Date(parseInt(endDate)).toISOString()
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching calendar slots:', error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      error: error.response?.data?.message || error.message,
+      details: error.response?.data || null
+    });
+  }
+});
 
 // ╔═══════════════════════════════════════════════════════════════════════════════╗
 // ║  CALL STATE API ENDPOINTS                                                     ║
@@ -1031,6 +1178,7 @@ app.listen(PORT, () => {
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
   console.log(`   GET  http://localhost:${PORT}/api/monitor-stuck`);
+  console.log(`   GET  http://localhost:${PORT}/api/get-free-slots`);
 });
 
 module.exports = app;
