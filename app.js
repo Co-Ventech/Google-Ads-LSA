@@ -936,13 +936,9 @@ app.get('/api/get-free-slots', async (req, res) => {
     const getTimezoneLabel = (offset) => {
       const timezoneMap = {
         '-05:00': 'EST',
-        '-04:00': 'EDT',
         '-06:00': 'CST',
-        '-05:00': 'CDT',
         '-07:00': 'MST',
-        '-06:00': 'MDT',
-        '-08:00': 'PST',
-        '-07:00': 'PDT'
+        '-08:00': 'PST'
       };
       return timezoneMap[offset] || `UTC${offset}`;
     };
