@@ -875,6 +875,7 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
 
 app.get('/api/get-free-slots', async (req, res) => {
   console.log('📅 GET /api/get-free-slots called');
+  console.log(`📋 Query params:`, req.query);
 
   try {
     // Get configuration from env variables (can be overridden by query params)
