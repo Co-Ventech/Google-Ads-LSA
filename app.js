@@ -1021,21 +1021,24 @@ app.get('/api/get-free-slots', async (req, res) => {
 
 app.post('/check-state', (req, res) => {
   // Debug: Log exactly what VAPI/AI sent in the tool call
-  console.log("=== POST / hit ===");
+  console.log("=== POST /check-state hit ===");
   console.log("AI sent vars:", JSON.stringify(req.body, null, 2));
 
   try {
     const { callId, phone } = req.body;
     const id = callId || phone || Date.now().toString();
+    console.log(`Call ID: ${id}`);
 
     // Get existing data for this call
     const existingData = callData[id] || {};
+    console.log("Existing data:", JSON.stringify(existingData, null, 2));
     
     // Merge: only update fields from req.body that have actual values
     // This prevents empty strings or undefined from overwriting existing data
     const mergedData = { ...existingData };
     
     // Only update fields that are provided and have meaningful values
+    const updatedFields = [];
     Object.keys(req.body).forEach(key => {
       const newValue = req.body[key];
       // Only update if the new value is not empty/undefined/null
@@ -1046,12 +1049,19 @@ app.post('/check-state', (req, res) => {
         // For strings, also check it's not empty
         if (typeof newValue === 'string' && newValue === '') {
           // Skip empty strings - don't overwrite existing data
+          console.log(`  Skipping empty string for field: ${key}`);
           return;
         }
         // For booleans, numbers, and non-empty strings: update
         mergedData[key] = newValue;
+        updatedFields.push(`${key}=${JSON.stringify(newValue)}`);
       }
     });
+    
+    if (updatedFields.length > 0) {
+      console.log(`Merged fields: ${updatedFields.join(', ')}`);
+    }
+    console.log("Merged data:", JSON.stringify(mergedData, null, 2));
 
     // Compute next action using merged data (so it has all previous info)
     const result = computeNextAction(mergedData);
@@ -1065,7 +1075,7 @@ app.post('/check-state', (req, res) => {
       collected: result.collected
     };
 
-    console.log(`Updated state for ${id}:`, callData[id]);
+    console.log(`Updated state for ${id}:`, JSON.stringify(callData[id], null, 2));
 
     res.json({
       next_action: result.phase,
@@ -1079,7 +1089,6 @@ app.post('/check-state', (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
