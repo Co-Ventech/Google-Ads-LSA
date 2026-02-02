@@ -1026,29 +1026,62 @@ app.post('/check-state', (req, res) => {
 
   try {
     const { callId, phone } = req.body;
-    const id = callId || phone || Date.now().toString();
-    console.log(`Call ID: ${id}`);
-
-    // Get existing data for this call
-    const existingData = callData[id] || {};
+    
+    // VAPI callId should be consistent throughout the entire call
+    // It's provided via {{call.id}} variable in VAPI
+    let id = null;
+    let existingData = {};
+    
+    // Priority 1: Use VAPI callId if provided (non-empty)
+    if (callId && callId.trim() !== '') {
+      id = callId;
+      existingData = callData[id] || {};
+      console.log(`✅ Using VAPI callId: ${id}`);
+    } else if (phone && phone.trim() !== '') {
+      // Priority 2: No callId yet, but we have phone - search for existing call
+      const existingIdByPhone = Object.keys(callData).find(key => {
+        const data = callData[key];
+        return data && data.phone === phone;
+      });
+      
+      if (existingIdByPhone) {
+        id = existingIdByPhone;
+        existingData = callData[id];
+        console.log(`✅ Found existing call by phone ${phone}, using ID: ${id}`);
+      } else {
+        // New call - use phone as temporary ID until callId arrives
+        id = phone;
+        existingData = {};
+        console.log(`📞 New call detected, using phone as temporary ID: ${id}`);
+      }
+    } else {
+      // Last resort: generate timestamp (shouldn't happen with proper VAPI config)
+      id = Date.now().toString();
+      existingData = callData[id] || {};
+      console.log(`⚠️ No callId or phone provided, generated ID: ${id}`);
+    }
+    
+    console.log(`Final Call ID: ${id}`);
     console.log("Existing data:", JSON.stringify(existingData, null, 2));
     
     // Merge: only update fields from req.body that have actual values
-    // This prevents empty strings or undefined from overwriting existing data
     const mergedData = { ...existingData };
+    
+    // Store callId if provided (even if empty initially, VAPI might send it later)
+    if (callId !== undefined) {
+      mergedData.callId = callId;
+    }
     
     // Only update fields that are provided and have meaningful values
     const updatedFields = [];
     Object.keys(req.body).forEach(key => {
+      // Skip callId - we already handled it above
+      if (key === 'callId') return;
+      
       const newValue = req.body[key];
-      // Only update if the new value is not empty/undefined/null
-      // For strings: not empty string
-      // For booleans: always update (they can be false)
-      // For numbers: always update (they can be 0)
       if (newValue !== undefined && newValue !== null) {
         // For strings, also check it's not empty
         if (typeof newValue === 'string' && newValue === '') {
-          // Skip empty strings - don't overwrite existing data
           console.log(`  Skipping empty string for field: ${key}`);
           return;
         }
@@ -1063,7 +1096,7 @@ app.post('/check-state', (req, res) => {
     }
     console.log("Merged data:", JSON.stringify(mergedData, null, 2));
 
-    // Compute next action using merged data (so it has all previous info)
+    // Compute next action using merged data
     const result = computeNextAction(mergedData);
 
     // Update callData with merged data + computed results
@@ -1074,6 +1107,15 @@ app.post('/check-state', (req, res) => {
       warnings: result.warnings,
       collected: result.collected
     };
+    
+    // If we have a valid callId in mergedData and it's different from current ID,
+    // also store the data under callId key for future lookups
+    if (mergedData.callId && mergedData.callId.trim() !== '' && mergedData.callId !== id) {
+      callData[mergedData.callId] = callData[id];
+      console.log(`📌 Also stored data under VAPI callId: ${mergedData.callId}`);
+      // Update id to use callId for future requests
+      id = mergedData.callId;
+    }
 
     console.log(`Updated state for ${id}:`, JSON.stringify(callData[id], null, 2));
 
@@ -1089,6 +1131,8 @@ app.post('/check-state', (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
