@@ -1071,7 +1071,6 @@ app.post('/check-state', (req, res) => {
   }
 });
 
-
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
