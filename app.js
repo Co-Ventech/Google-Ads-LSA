@@ -1028,11 +1028,37 @@ app.post('/check-state', (req, res) => {
     const { callId, phone } = req.body;
     const id = callId || phone || Date.now().toString();
 
-    const result = computeNextAction(req.body);
+    // Get existing data for this call
+    const existingData = callData[id] || {};
+    
+    // Merge: only update fields from req.body that have actual values
+    // This prevents empty strings or undefined from overwriting existing data
+    const mergedData = { ...existingData };
+    
+    // Only update fields that are provided and have meaningful values
+    Object.keys(req.body).forEach(key => {
+      const newValue = req.body[key];
+      // Only update if the new value is not empty/undefined/null
+      // For strings: not empty string
+      // For booleans: always update (they can be false)
+      // For numbers: always update (they can be 0)
+      if (newValue !== undefined && newValue !== null) {
+        // For strings, also check it's not empty
+        if (typeof newValue === 'string' && newValue === '') {
+          // Skip empty strings - don't overwrite existing data
+          return;
+        }
+        // For booleans, numbers, and non-empty strings: update
+        mergedData[key] = newValue;
+      }
+    });
 
+    // Compute next action using merged data (so it has all previous info)
+    const result = computeNextAction(mergedData);
+
+    // Update callData with merged data + computed results
     callData[id] = {
-      ...(callData[id] || {}),
-      ...req.body,
+      ...mergedData,
       phase: result.phase,
       instruction: result.instruction,
       warnings: result.warnings,
@@ -1053,7 +1079,6 @@ app.post('/check-state', (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 
 app.get('/api/health', async (req, res) => {
   try {
