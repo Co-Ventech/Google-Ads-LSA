@@ -1056,7 +1056,7 @@ app.post('/check-state', (req, res) => {
       collected: result.collected
     };
 
-    console.log(`Updated state for ${id}:`, callData[id]);
+    console.log(`Updated state for ${id}:`, JSON.stringify(callData[id], null, 2));
 
     res.json({
       next_action: result.phase,
