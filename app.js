@@ -954,7 +954,7 @@ app.get('/api/get-free-slots', async (req, res) => {
         try {
           // Parse ISO timestamp: "2026-01-22T15:30:00-05:00"
           const [datePart, timeAndZone] = isoTimestamp.split('T');
-          
+
           // Extract time and timezone offset
           const timezoneMatch = timeAndZone.match(/([+-]\d{2}:\d{2})$/);
           const offset = timezoneMatch ? timezoneMatch[1] : '-05:00';
@@ -1020,19 +1020,36 @@ app.get('/api/get-free-slots', async (req, res) => {
 // ╚═══════════════════════════════════════════════════════════════════════════════╝
 
 app.post('/check-state', (req, res) => {
-  // Debug: Log exactly what VAPI/AI sent in the tool call
-  console.log("=== POST / hit ===");
+  console.log("=== POST /check-state hit ===");
   console.log("AI sent vars:", JSON.stringify(req.body, null, 2));
+  console.log("Number of fields sent:", Object.keys(req.body).length);
+
+  if (Object.keys(req.body).length < 3) {
+    console.warn("⚠️ WARNING: AI sent too few fields! Probably dropping previous data!");
+  }
 
   try {
     const { callId, phone } = req.body;
     const id = callId || phone || Date.now().toString();
 
-    const result = computeNextAction(req.body);
+    // CRITICAL FIX: Merge existing state with new data
+    const existingState = callData[id] || {};
+    const mergedState = { ...existingState, ...req.body };
 
+    // Clean up: Remove non-state fields from the merge
+    delete mergedState.phase;
+    delete mergedState.instruction;
+    delete mergedState.warnings;
+    delete mergedState.collected;
+    delete mergedState.full_chart;
+
+    console.log(`Merged state for ${id}:`, mergedState);
+
+    const result = computeNextAction(mergedState);
+
+    // Store the complete merged state
     callData[id] = {
-      ...(callData[id] || {}),
-      ...req.body,
+      ...mergedState,
       phase: result.phase,
       instruction: result.instruction,
       warnings: result.warnings,
