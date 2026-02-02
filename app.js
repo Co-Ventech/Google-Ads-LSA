@@ -1027,18 +1027,19 @@ app.post('/check-state', (req, res) => {
   try {
     const { callId, phone } = req.body;
     
-    // VAPI callId should be consistent throughout the entire call
+    // VAPI callId is generated when call starts and should always be available
     // It's provided via {{call.id}} variable in VAPI
     let id = null;
     let existingData = {};
     
-    // Priority 1: Use VAPI callId if provided (non-empty)
+    // Priority 1: Use VAPI callId (should always be present from call start)
     if (callId && callId.trim() !== '') {
       id = callId;
       existingData = callData[id] || {};
       console.log(`✅ Using VAPI callId: ${id}`);
     } else if (phone && phone.trim() !== '') {
-      // Priority 2: No callId yet, but we have phone - search for existing call
+      // Fallback: If callId somehow missing, use phone as backup
+      // This shouldn't happen with proper VAPI config, but safety net
       const existingIdByPhone = Object.keys(callData).find(key => {
         const data = callData[key];
         return data && data.phone === phone;
@@ -1047,15 +1048,14 @@ app.post('/check-state', (req, res) => {
       if (existingIdByPhone) {
         id = existingIdByPhone;
         existingData = callData[id];
-        console.log(`✅ Found existing call by phone ${phone}, using ID: ${id}`);
+        console.log(`⚠️ CallId missing, found existing call by phone ${phone}, using ID: ${id}`);
       } else {
-        // New call - use phone as temporary ID until callId arrives
         id = phone;
         existingData = {};
-        console.log(`📞 New call detected, using phone as temporary ID: ${id}`);
+        console.log(`⚠️ CallId missing, using phone as ID: ${id}`);
       }
     } else {
-      // Last resort: generate timestamp (shouldn't happen with proper VAPI config)
+      // Last resort: generate timestamp (shouldn't happen)
       id = Date.now().toString();
       existingData = callData[id] || {};
       console.log(`⚠️ No callId or phone provided, generated ID: ${id}`);
@@ -1067,7 +1067,7 @@ app.post('/check-state', (req, res) => {
     // Merge: only update fields from req.body that have actual values
     const mergedData = { ...existingData };
     
-    // Store callId if provided (even if empty initially, VAPI might send it later)
+    // Store callId if provided (should always be the case)
     if (callId !== undefined) {
       mergedData.callId = callId;
     }
@@ -1107,15 +1107,6 @@ app.post('/check-state', (req, res) => {
       warnings: result.warnings,
       collected: result.collected
     };
-    
-    // If we have a valid callId in mergedData and it's different from current ID,
-    // also store the data under callId key for future lookups
-    if (mergedData.callId && mergedData.callId.trim() !== '' && mergedData.callId !== id) {
-      callData[mergedData.callId] = callData[id];
-      console.log(`📌 Also stored data under VAPI callId: ${mergedData.callId}`);
-      // Update id to use callId for future requests
-      id = mergedData.callId;
-    }
 
     console.log(`Updated state for ${id}:`, JSON.stringify(callData[id], null, 2));
 
@@ -1131,8 +1122,6 @@ app.post('/check-state', (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
-
 app.get('/api/health', async (req, res) => {
   try {
     const accessToken = await getGoogleAccessToken();
