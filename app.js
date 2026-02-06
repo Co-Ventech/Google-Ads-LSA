@@ -409,7 +409,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
           },
 
           ghlContactData: {
-            locationId: process.env.GHL_LOCATION_ID || 'uVlhM6VHsupswi3yUiOZ',
+            locationId: process.env.GHL_LOCATION_ID ,
             firstName: contactDetails.consumerName || '',
             lastName: '',
             email: contactDetails.email || '',
