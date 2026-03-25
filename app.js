@@ -409,7 +409,7 @@ async function fetchLSALeadsWithConversationHistory(minutes) {
           },
 
           ghlContactData: {
-            locationId: process.env.GHL_LOCATION_ID ,
+            locationId: process.env.GHL_LOCATION_ID,
             firstName: contactDetails.consumerName || '',
             lastName: '',
             email: contactDetails.email || '',
@@ -816,13 +816,24 @@ app.get('/api/proxy-calendar-slots-auto', async (req, res) => {
       return ['th', 'st', 'nd', 'rd'][Math.min(n % 10, 4)] || 'th';
     };
 
+    // const timezoneFromOffset = (offset) => {
+    //   const map = {
+    //     '-05:00': 'EST',
+    //     '-06:00': 'CST',
+    //     '-07:00': 'MST',
+    //     '-08:00': 'PST'
+    //   };
+    //   return map[offset] || `UTC${offset}`;
+    // };
+
     const timezoneFromOffset = (offset) => {
       const map = {
-        '-05:00': 'EST',
-        '-06:00': 'CST',
-        '-07:00': 'MST',
-        '-08:00': 'PST'
+        '-04:00': 'EDT', // Eastern Daylight
+        '-05:00': 'CDT', // Central Daylight
+        '-06:00': 'MDT', // Mountain Daylight
+        '-07:00': 'PDT'  // Pacific Daylight
       };
+
       return map[offset] || `UTC${offset}`;
     };
 
@@ -934,13 +945,24 @@ app.get('/api/get-free-slots', async (req, res) => {
     };
 
     // Helper function to get timezone label from offset
+    // const getTimezoneLabel = (offset) => {
+    //   const timezoneMap = {
+    //     '-05:00': 'EST',
+    //     '-06:00': 'CST',
+    //     '-07:00': 'MST',
+    //     '-08:00': 'PST'
+    //   };
+    //   return timezoneMap[offset] || `UTC${offset}`;
+    // };
+
     const getTimezoneLabel = (offset) => {
       const timezoneMap = {
-        '-05:00': 'EST',
-        '-06:00': 'CST',
-        '-07:00': 'MST',
-        '-08:00': 'PST'
+        '-04:00': 'EDT',
+        '-05:00': 'CDT',
+        '-06:00': 'MDT',
+        '-07:00': 'PDT'
       };
+
       return timezoneMap[offset] || `UTC${offset}`;
     };
 
