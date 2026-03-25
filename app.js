@@ -769,7 +769,7 @@ app.get('/api/monitor-stuck', async (req, res) => {
         checkInterval: `${MONITORING_CONFIG.intervalMinutes} minutes`,
         maxMessageAge: `${MONITORING_CONFIG.maxMessageAgeMinutes} minutes`,
         lookbackMinutes: MONITORING_CONFIG.lookbackMinutes,
-        emailAlertsEnabled: true,
+        emailAlertsEnabled: false,
         serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         clientTimezone: process.env.TIME_ZONE
       }
@@ -1174,8 +1174,8 @@ if (process.env.NODE_ENV !== 'test') {
       console.log(`   └─ Email Sent: ${result.emailSent ? 'YES ✅' : 'NO ⏸️'}`);
 
       if (result.stuckLeads.length > 0) {
-        console.log('\n🚨 ALERT: Email notification sent');
-        console.log(`   Recipient: ${process.env.NOTIFICATION_EMAIL}`);
+        console.log('\n🚨 ALERT: Stuck leads detected (email alerts DISABLED)');
+        console.log(`   Leads would be sent to: ${process.env.NOTIFICATION_EMAIL} (if enabled)`);
         result.stuckLeads.forEach(lead => {
           console.log(`   • Lead ${lead.leadId}: ${lead.minutesSinceLastMessage} min wait (ACTUAL)`);
         });

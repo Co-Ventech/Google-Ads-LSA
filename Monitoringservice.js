@@ -354,7 +354,8 @@ async function monitorStuckConversations() {
   console.log(`   Lookback: ${MONITORING_CONFIG.lookbackMinutes} minutes`);
   console.log('🔍 ════════════════════════════════════════════════════════════\n');
   
-  const { sendStuckLeadAlert } = require('./emailService');
+  // EMAIL MONITORING DISABLED - uncomment below to re-enable email alerts
+  // const { sendStuckLeadAlert } = require('./emailService');
   
   // Use our own timezone-aware fetch function
   const leadsResult = await fetchLeadsForMonitoring(MONITORING_CONFIG.lookbackMinutes);
@@ -444,22 +445,23 @@ async function monitorStuckConversations() {
   console.log(`   Stuck leads found: ${stuckLeads.length}`);
   
   if (stuckLeads.length > 0) {
-    console.log(`\n📧 [MONITOR] Sending email alert for ${stuckLeads.length} stuck lead(s)...`);
+    console.log(`\n📧 [MONITOR] Email alerts DISABLED - skipping email notification for ${stuckLeads.length} stuck lead(s)...`);
     
-    const emailResult = await sendStuckLeadAlert(stuckLeads);
-    
-    if (emailResult.statusCode === 200) {
-      console.log(`✅ [MONITOR] Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
-      console.log(`   Message ID: ${emailResult.messageId}`);
-    } else {
-      console.log(`❌ [MONITOR] Email alert failed: ${emailResult.message}`);
-    }
+    // EMAIL MONITORING DISABLED - uncomment below to re-enable
+    // const emailResult = await sendStuckLeadAlert(stuckLeads);
+    // 
+    // if (emailResult.statusCode === 200) {
+    //   console.log(`✅ [MONITOR] Email alert sent successfully to: ${process.env.NOTIFICATION_EMAIL}`);
+    //   console.log(`   Message ID: ${emailResult.messageId}`);
+    // } else {
+    //   console.log(`❌ [MONITOR] Email alert failed: ${emailResult.message}`);
+    // }
     
     return {
       success: true,
       stuckLeads: stuckLeads,
       checked: leadsResult.count,
-      emailSent: emailResult.statusCode === 200
+      emailSent: false
     };
     
   } else {
