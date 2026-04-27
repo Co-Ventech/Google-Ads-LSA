@@ -51,22 +51,24 @@ async function uploadRecordingToS3({ recordingUrl, callId }) {
 }
 
 async function handleUploadRecording(req, res) {
+  console.log('\n📞 /upload-recording hit');
+  console.log('Full payload:', JSON.stringify(req.body, null, 2));
+
   const body = req.body || {};
-  const event = body.event;
-  const data = body.data || {};
-  const callId = data.id;
-  const recordingUrl = data.recording;
 
-  console.log(`\n📞 /upload-recording hit | event=${event} call_id=${callId}`);
+  // Extract from Cloudinary upload JSON format (from Lindy)
+  // Structure: { file, public_id: "call-recordings/CALL_ID", ... }
+  const recordingUrl = body.file;
+  const publicId = body.public_id || '';
 
-  if (event && event !== 'call.ended') {
-    console.log(`   ⏭️  Skipped: event is "${event}", not "call.ended"`);
-    return res.status(200).json({ skipped: true, reason: `event ${event} ignored` });
-  }
+  // Extract call ID from public_id: "call-recordings/3714458130" -> "3714458130"
+  const callId = publicId.split('/').pop();
+
+  console.log(`   call_id=${callId} recording=${recordingUrl ? 'present' : 'missing'}`);
 
   if (!callId) {
-    console.log('   ❌ Missing data.id in payload');
-    return res.status(400).json({ error: 'Missing data.id in payload' });
+    console.log('   ❌ Missing call ID in public_id');
+    return res.status(400).json({ error: 'Missing call ID in public_id' });
   }
 
   if (!recordingUrl) {
