@@ -6,6 +6,7 @@ const qs = require('querystring');
 const cors = require('cors');
 const { monitorStuckConversations } = require('./Monitoringservice');
 const { computeNextAction } = require('./CallStateService'); // If it's an object
+const { handleUploadRecording } = require('./recordingUploader');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -1041,6 +1042,8 @@ app.get('/api/get-free-slots', async (req, res) => {
 // ║  CALL STATE API ENDPOINTS                                                     ║
 // ╚═══════════════════════════════════════════════════════════════════════════════╝
 
+app.post('/upload-recording', handleUploadRecording);
+
 app.post('/check-state', (req, res) => {
   console.log("=== POST /check-state hit ===");
   console.log("AI sent vars:", JSON.stringify(req.body, null, 2));
@@ -1214,6 +1217,7 @@ app.listen(PORT, () => {
   console.log(`   GET  http://localhost:${PORT}/api/poll-now`);
   console.log(`   GET  http://localhost:${PORT}/api/monitor-stuck`);
   console.log(`   GET  http://localhost:${PORT}/api/get-free-slots`);
+  console.log(`   POST http://localhost:${PORT}/upload-recording`);
 });
 
 module.exports = app;
